@@ -74,7 +74,7 @@ get_results <- function(params, nreps = 100, outs, times, raw = FALSE) {
 create_boundary_ems <- function(data_raw, out_name, ranges, reps,
                                 bound_exp, bound_cov, bound_bulk_exp, bound_bulk_cov,
                                 bound_bulk_imp) {
-  data <- data.frame(data_raw |> dplyr::group_by(beta, gamma, omega) |>
+  data <- data.frame(data_raw |> dplyr::group_by(across(all_of(names(ranges)))) |>
                        dplyr::summarise(exp = mean(.data[[out_name]]), var = var(.data[[out_name]])))
   if (length(reps) == 1) reps <- rep(reps, nrow(data))
   no_bound_ems <- hmer::emulator_from_data(data_raw, out_name, ranges,
@@ -140,106 +140,130 @@ inverse = function (f, lower = -5, upper = 10, xmin, xmax, theta) {
 }
 
 ## Scoring functions for variance reduction
-## Calculates w(X,X'); as per Binois (2019)
-w_func <- function(x, xp, theta, ranges) {
-  (sqrt(2*pi/4) * theta)^length(x) * prod(
-    purrr::map_dbl(seq_along(x), function(i) {
-      exp(-(x[i]-xp[i])^2/(2*theta^2)) * (2*pnorm(sqrt(2) * (2*ranges[[i]][2]-x[i]-xp[i])/(sqrt(2)*theta)) -
-                                            2*pnorm(sqrt(2) * (2*ranges[[i]][1]-x[i]-xp[i])/sqrt(2)*theta))
-    })
-  )
+# Calculate the mean emulator variance across the space, using a representative
+# collection of points.
+mean_em_var <- function(pt, pre_em, var_em, data, reps, boundary_col = 1, boundary_val = 0) {
+  em_prior_var <- pre_em$u_sigma^2
+  datamutate <- (data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
+  ptmutate <- (pt |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
+  datarminus <- pre_em$get_cov(datamutate, full = TRUE)/em_prior_var
+  term1 <- em_prior_var * (1-r1(pt, pre_em)^2)
+  term2a <- R1(pt, data, pre_em) * pre_em$get_cov(ptmutate, datamutate, full = TRUE)
+  term2c <- R1(data, pt, pre_em) * pre_em$get_cov(datamutate, ptmutate, full = TRUE)
+  var_em_vals <- var_em$get_exp(data)
+  var_em_vals[var_em_vals < 0] <- 1e-6
+  term2binv <- R1(data, data, pre_em) * pre_em$get_cov(datamutate, datamutate, full = TRUE) +
+    diag(c(1/reps * var_em_vals))
+  term2b <- tryCatch(chol2inv(chol(term2binv)),
+                     error = function(e) MASS::ginv(term2binv))
+  term2 <- term2a %*% term2b %*% term2c
+  complete <- term1 - diag(term2)
+  complete[complete < 0] <- 1e-6
+  return(complete)
 }
-## Finds the variance reduction under the introduction of a new point, x'
-new_point_score <- function(point, points, em_exp, em_var, ranges, kinv, wmat) {
-  r_val <- max(0, em_var$get_exp(point)) # r(x)
-  sig <- em_exp$get_cov(point) + r_val #sigma2(x)
-  k_val <- em_exp$get_cov(point, points, full = TRUE) #k(x)
-  em_theta <- em_exp$add_args$pre_em$corr$hyper_p$theta
-  w_vec <- purrr::map_dbl(seq_len(nrow(points)), function(i) w_func(unlist(point), unlist(points[i,]), em_theta, ranges)) # w(x)
-  (k_val %*% kinv %*% wmat %*% kinv %*% t(k_val) + w_func(unlist(point), unlist(point), em_theta, ranges) - 2*w_vec %*% kinv %*% t(k_val))/sig
+# Calculate the score due to including a new design point
+new_point_score <- function(point, points, pre_em, var_em, reps, grid, ntoadd = 1) {
+  new_data <- rbind.data.frame(points, point)
+  if (is.null(point))
+    new_reps <- reps
+  else
+    new_reps <- c(reps, ntoadd)
+  vars <- mean(mean_em_var(grid, pre_em, var_em, new_data, new_reps))
+  return(vars)
 }
-## Finds the variance reduction under the addition of a replicate to an existing point
-new_rep_score <- function(points, reps, index, em_var, kinv, wmat) {
-  r_val <- max(em_var$get_exp(points[index,]), 0)
-  kout <- outer(kinv[index,,drop=TRUE], kinv[,index,drop=TRUE], "*")
-  trace_val <- sum(diag(kout %*% wmat))
-  quot <- reps[index]*(reps[index]+1)*r_val - kinv[index,index]
-  return(trace_val/quot)
+# Calculate the score due to adding a repetition at an existing design point
+new_rep_score <- function(index, points, pre_em, var_em, reps, grid, ntoadd = 1) {
+  new_reps <- reps
+  new_reps[index] <- new_reps[index]+ntoadd
+  vars <- mean(mean_em_var(grid, pre_em, var_em, points, new_reps))
+  return(vars)
 }
 
 ## Chooses an 'optimal' design
-# Given a set of (non-implausible) points, progressively adds points to a candidate
-# set or adds a rep to an existing point in the candidate set. Returns the collection
+# Given a set of data points, progressively adds points to a candidate
+# set or adds a rep to an existing point in the candidate set. Calculations of
+# expected improvement are based on evaluating the mean emulator variance
+# over a grid of points, testgrid: the more dense the grid, the more accurate the
+# estimate, but the more computationally intensive it is. Returns the collection
 # of points, along with a column denoting how many reps are to be run at each point.
-design_subselect <- function(points, data, em_exp, em_var, pt_max, rep_max, prior_em, ranges) {
-  pt_var_exp <- em_exp$get_cov(points)
-  pt_var_var <- em_var$get_exp(points)
-  pt_var_var[pt_var_var < 0] <- 1e-6
-  find_next_point <- function(candidates, data, em_exp, em_var, ranges, kinv, wmat) {
-    point_scores <- purrr::map_dbl(seq_len(nrow(candidates)), function(i) {
-      new_point_score(candidates[i,], data, em_exp, em_var, ranges, kinv, wmat)
+design_subselect <- function(data, pre_em, var_em, reps, ranges, testgrid,
+                              rep_max, pt_max, ntoadd = 1,
+                              store_order = FALSE, verbose = FALSE,
+                              return_scores = FALSE) {
+  if (store_order) order_vector <- c()
+  if (return_scores) {
+    r_scores <- c()
+    p_scores <- c()
+  }
+  find_next_point <- function(data, pre_em, var_em, reps, ranges, ntoadd) {
+    opt_func <- function(x) {
+      x_mod <- data.frame(matrix(x, nrow = 1)) |> setNames(names(ranges))
+      x_mod <- x_mod[,names(ranges), drop = FALSE]
+      new_point_score(x_mod, data, pre_em, var_em, reps, testgrid, ntoadd)
+    }
+    optimised <- optim(purrr::map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
+                       lower = purrr::map_dbl(ranges, ~.[[1]]+0.01*diff(.)),
+                       upper = purrr::map_dbl(ranges, ~.[[2]]-0.01*diff(.)),
+                       method = "L-BFGS-B", control = list(trace = FALSE))
+    this_val <- optimised$value
+    this_pt <- data.frame(matrix(optimised$par, nrow = 1)) |> setNames(names(ranges))
+    dists <- apply(data, 1, function(x) {
+      sum((x-this_pt)^2)
     })
-    return(list(val = max(point_scores), index = which.max(point_scores)))
+    if (this_val < 0) this_val <- Inf
+    if (any(dists < 1e-6)) this_val <- NaN
+    return(list(val = this_val, point = this_pt))
   }
-  find_next_rep <- function(points, reps, em_var, kinv, wmat) {
-    rep_scores <- purrr::map_dbl(seq_len(nrow(points)), function(i) {
-      new_rep_score(points, reps, i, em_var, kinv, wmat)
+  find_next_rep <- function(data, pre_em, var_em, reps, ntoadd) {
+    rep_vals <- purrr::map_dbl(seq_len(nrow(data)), function(i) {
+      new_rep_score(i, data, pre_em, var_em, reps, testgrid, ntoadd)
     })
-    return(list(val = max(rep_scores), index = which.max(rep_scores)))
+    return(list(val = min(rep_vals), index = which.min(rep_vals)))
   }
-  if (nrow(points) == pt_max) {
-    current_pts <- seq_len(nrow(points))
-    current_reps <- rep(2, nrow(points))
-  }
-  else {
-    current_pts <- c()
-    current_reps <- c()
-  }
-  fixed_indices <- seq_len(nrow(points))
   failsafe <- 0
-  while (sum(current_reps) < rep_max && failsafe < 500) {
-    current_points <- points[current_pts,]
-    current_data <- rbind.data.frame(data, current_points)
-    if (length(current_reps) != 0) {
-      rep_k_mat <- em_exp$get_cov(current_points, full = TRUE)
-      rep_k_inv <- MASS::ginv(rep_k_mat)
-      rep_w_mat <- matrix(do.call('rbind', purrr::map(seq_len(nrow(current_points)), function(i) {
-        purrr::map_dbl(seq_len(nrow(current_points)), function(j) {
-          w_func(unlist(current_points[i,]), unlist(current_points[j,]),
-                 prior_em$corr$hyper_p$theta, ranges)
-        })
-      })), nrow = nrow(current_points), byrow = TRUE)
-      rep_suggest <- find_next_rep(current_points, current_reps, em_var, rep_k_inv, rep_w_mat)
-    }
-    else
-      rep_suggest <- NULL
-    if (length(current_pts) < pt_max) {
-      pt_k_mat <- em_exp$get_cov(current_data, full = TRUE)
-      pt_k_inv <- MASS::ginv(pt_k_mat)
-      pt_w_mat <- matrix(do.call('rbind', purrr::map(seq_len(nrow(current_data)), function(i) {
-        purrr::map_dbl(seq_len(nrow(current_data)), function(j) {
-          w_func(unlist(current_data[i,]), unlist(current_data[j,]),
-                 prior_em$corr$hyper_p$theta, ranges)
-        }
-        )})), nrow = nrow(current_data), byrow = TRUE)
-      if (length(current_pts) == 0)
-        pt_suggest <- find_next_point(points, data, em_exp, em_var, ranges, pt_k_inv, pt_w_mat)
-      else
-        pt_suggest <- find_next_point(points[-current_pts,], current_data, em_exp, em_var, ranges, pt_k_inv, pt_w_mat)
-    }
+  while(sum(reps) < rep_max && failsafe < 1000) {
+    rep_suggest <- find_next_rep(data, pre_em, var_em, reps, ntoadd)
+    if (nrow(data) < pt_max)
+      pt_suggest <- find_next_point(data, pre_em, var_em, reps, ranges, ntoadd)
     else
       pt_suggest <- NULL
-    if (is.null(pt_suggest) || (!is.null(rep_suggest) && rep_suggest$val > pt_suggest$val)) {
-      current_reps[rep_suggest$index] <- current_reps[rep_suggest$index] + 1
+    if (verbose) {
+      print_str <- paste0("Proposal ", failsafe, ":")
+      if (!is.null(pt_suggest)) {
+        print_str <- paste0(print_str, " Point score ", signif(pt_suggest$val, 4), ";")
+      }
+      print_str <- paste0(print_str, " Rep score ", signif(rep_suggest$val, 4))
+      if (!is.null(pt_suggest) && !is.nan(pt_suggest$val)) {
+        if (pt_suggest$val < rep_suggest$val)
+          print_str <- paste0(print_str, " - New point chosen;")
+        else
+          print_str <- paste0(print_str, " - Extra rep chosen;")
+      }
+      else
+        print_str <- paste0(print_str, " - Extra rep chosen;")
+      print(print_str)
+    }
+    if (return_scores) {
+      r_scores <- c(r_scores, rep_suggest$val)
+      if (is.null(pt_suggest)) p_scores <- c(p_scores, Inf)
+      else p_scores <- c(p_scores, pt_suggest$val)
+    }
+    if (is.null(pt_suggest) || is.nan(pt_suggest$val) || rep_suggest$val < pt_suggest$val) {
+      reps[rep_suggest$index] <- reps[rep_suggest$index] + ntoadd
+      if (store_order) order_vector <- c(order_vector, rep_suggest$index)
     }
     else {
-      current_pts <- c(current_pts, fixed_indices[pt_suggest$index])
-      fixed_indices <- fixed_indices[-pt_suggest$index]
-      current_reps <- c(current_reps, 2)
+      data <- rbind.data.frame(data, pt_suggest$point)
+      reps <- c(reps, ntoadd)
+      if (store_order) order_vector <- c(order_vector, nrow(data))
     }
     failsafe <- failsafe + 1
   }
-  selected_pts <- points[current_pts,]
-  pts_with_reps <- cbind.data.frame(selected_pts, current_reps) |> setNames(c(names(selected_pts), "reps"))
+  pts_with_reps <- cbind.data.frame(data, reps) |> setNames(c(names(data), "reps"))
+  if (store_order) {
+    if (return_scores)
+      return(list(points = pts_with_reps, order = order_vector, rep_scores = r_scores, pt_scores = p_scores))
+    return(list(points = pts_with_reps, order = order_vector))
+  }
   return(pts_with_reps)
 }

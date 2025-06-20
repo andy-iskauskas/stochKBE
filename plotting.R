@@ -37,15 +37,25 @@ redgreen <- c('#00FF00', '#18FF00', '#31FF00', '#49FF00', '#62FF00',
 # Takes data to plot, data prefix to identify columns, the omega value to slice at,
 # a title prefix, training points (if wanted to overlay those), and a distance from
 # the slice beyond which points are plotted in grey
-grid_plot <- function(data, prefix, omega_pt, title_add = "", training_pts = NULL, pt_dist = Inf) {
+grid_plot <- function(data, prefix, omega_pt = NULL, title_add = "", training_pts = NULL, pt_dist = Inf,
+                      breaks = NULL) {
   if (prefix == "E") p_title <- paste(title_add, "Emulator Expectation")
   if (prefix == "V") p_title <- paste(title_add, "Emulator Variance")
   if (prefix == "I") p_title <- paste(title_add, "Emulator Implausibility")
-  g <- ggplot(data = subset(data[grep(prefix, data$name),], omega == omega_pt),
-              aes(x = beta, y = gamma))
+  if (!is.null(omega_pt))
+    g <- ggplot(data = subset(data[grep(prefix, data$name),], omega == omega_pt),
+                aes(x = beta, y = gamma))
+  else
+    g <- ggplot(data = data[grep(prefix, data$name),], aes(x = beta, y = gamma))
   if (prefix != "I") {
-    g <- g + geom_contour_filled(aes(z = value)) +
-      scale_fill_viridis(discrete = TRUE) + guides(fill = guide_legend(ncol = 1))
+    if (is.null(breaks)) {
+      g <- g + geom_contour_filled(aes(z = value)) +
+        scale_fill_viridis(discrete = TRUE) + guides(fill = guide_legend(ncol = 1))
+    }
+    else {
+      g <- g + geom_contour_filled(aes(z = value), breaks = breaks) +
+        scale_fill_viridis(discrete = TRUE) + guides(fill = guide_legend(ncol = 1))
+    }
   }
   else {
     g <- g + geom_contour_filled(aes(z = value), colour = 'black', linewidth = 0.1, breaks = imp_breaks) +
@@ -54,9 +64,12 @@ grid_plot <- function(data, prefix, omega_pt, title_add = "", training_pts = NUL
                                guide = guide_legend(ncol = 1, reverse = TRUE))
   }
   if (!is.null(training_pts)) {
-    g <- g + geom_point(data = subset(training_pts, abs(omega - omega_pt) < pt_dist)) +
-      geom_point(data = subset(training_pts, abs(omega - omega_pt) > pt_dist), col = "grey40",
-                 pch = 4, cex = 0.5)
+    if (!is.null(omega_pt))
+      g <- g + geom_point(data = subset(training_pts, abs(omega - omega_pt) < pt_dist)) +
+        geom_point(data = subset(training_pts, abs(omega - omega_pt) > pt_dist), col = "grey40",
+                   pch = 4, cex = 0.5)
+    else
+      g <- g + geom_point(data = training_pts)
   }
   g <- g + facet_wrap(vars(name), nrow = 2, ncol = 2, labeller = plot_labels) +
     labs(title = p_title)

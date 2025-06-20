@@ -10,7 +10,10 @@ source("baseFunctions.R")
 analytic_mean <- function(params, t, index, init_vals = N$M) {
   params <- unlist(params, use.names = FALSE)
   gamma <- params[2]
-  omega <- params[3]
+  if (length(params) < 3)
+    omega <- 0.24
+  else
+    omega <- params[3]
   S0 <- init_vals[1]
   I0 <- init_vals[2]
   R0 <- init_vals[3]
@@ -33,7 +36,10 @@ analytic_mean <- function(params, t, index, init_vals = N$M) {
 analytic_sd <- function(params, t, index1, index2, init_vals = N$M) {
   params <- unlist(params, use.names = FALSE)
   gamma <- params[2]
-  omega <- params[3]
+  if (length(params) < 3)
+    omega <- 0.24
+  else
+    omega <- params[3]
   S0 <- init_vals[1]
   I0 <- init_vals[2]
   R0 <- init_vals[3]
