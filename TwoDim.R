@@ -11,7 +11,7 @@ set.seed(42)
 ## Model set-up for Gillespie algorithm
 Num <- 1000
 N <- list()
-N$M <- c(750, 250, 0)
+N$M <- c(S = 750, I = 250, R = 0)
 
 N$Pre <- matrix(c(1, 0, 0, 0, 1, 0, 0, 0, 1), nrow = 3, byrow = TRUE)
 N$Post <- matrix(c(0, 1, 0, 0, 0, 1, 1, 0, 0), nrow = 3, byrow = TRUE)
@@ -40,14 +40,14 @@ training_points <- data.frame(t(apply(
   }
 ))) |> setNames(names(ranges))
 wave0_results <- do.call('rbind.data.frame', purrr::map(seq_len(nrow(training_points)), function(i) {
-  get_results(unlist(training_points[i,], use.names = FALSE), nreps = reps, outs = c(out_name), times = 15)
+  get_results(unlist(training_points[i,], use.names = FALSE), N, nreps = reps, outs = c(out_name), times = 15)
 })) |> setNames(c(names(ranges), out_name))
 wave0_output <- data.frame(wave0_results |> dplyr::group_by(across(all_of(names(ranges)))) |>
                              dplyr::summarise(exp = mean(.data[[out_name]]), var = var(.data[[out_name]])))
 
 ## Make the emulators
 ems_wave1 <- create_boundary_ems(wave0_results, out_name, ranges, reps,
-                                 b_exp, b_cov, bb_exp, bb_cov, bb_imp)
+                                 SIR_functions, bb_data, N, c(0), c(1), out_index, t_point)
 
 this_var_em <- ems_wave1$boundary_bulk$variance
 
@@ -155,7 +155,7 @@ anim_alt <- ggplot(data = trans_df, aes(x = beta, y = gamma)) +
   theme(legend.position = "none") +
   ggtitle("Repetitions Placed: {frame_time}")
 animate(anim_alt, nframes = 200, end_pause = 25, height = 800, width = 800)
-anim_save("PropAnim2dAlt.gif")
+anim_save("PropAnim2dAlt.gif", animation = anim_alt)
 save.image(file = "May13.RData")
 
 

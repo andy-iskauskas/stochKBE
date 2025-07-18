@@ -48,15 +48,15 @@ gillespied=function (N, T=400, dt=1, ...)
 # repetitions at the parameter set), outs (the output compartments
 # returned), and times (the times to record). raw gives the option of
 # returning the full, unsanitised, data.
-get_results <- function(params, nreps = 100, outs, times, raw = FALSE) {
+get_results <- function(params, obj, nreps = 100, outs, times, raw = FALSE) {
   params <- unlist(params, use.names = FALSE)
   tseq <- 0:max(times)
-  arra <- array(0, dim = c(max(tseq)+1, 3, nreps))
-  for(i in 1:nreps) arra[,,i] <- gillespied(N,T=max(times) + 1 + 0.001,dt=1,th=params)
+  arra <- array(0, dim = c(max(tseq)+1, ncol(obj$Pre), nreps))
+  for(i in 1:nreps) arra[,,i] <- gillespied(obj ,T=max(times) + 1 + 0.001,dt=1,th=params)
   if(raw) return(arra)
   collected <- list()
   for (i in 1:nreps) {
-    relev <- c(arra[times+1, which(c("S", "I", "R") %in% outs), i])
+    relev <- c(arra[times+1, which(names(obj$M) %in% outs), i])
     names <- unlist(purrr::map(outs, ~paste0(., times, sep = "")))
     relev <- setNames(relev, names)
     collected[[i]] <- relev
@@ -72,8 +72,8 @@ get_results <- function(params, nreps = 100, outs, times, raw = FALSE) {
 # vector of numerics of length equal to the number of parameter sets). Returns
 # a list of emulators: prior, bulk only, boundary only, and bulk-boundary.
 create_boundary_ems <- function(data_raw, out_name, ranges, reps,
-                                bound_exp, bound_cov, bound_bulk_exp, bound_bulk_cov,
-                                bound_bulk_imp) {
+                                analytics, bb_data, model,
+                                vals = c(0), indices = c(1), out_index, t) {
   data <- data.frame(data_raw |> dplyr::group_by(across(all_of(names(ranges)))) |>
                        dplyr::summarise(exp = mean(.data[[out_name]]), var = var(.data[[out_name]])))
   if (length(reps) == 1) reps <- rep(reps, nrow(data))
@@ -86,38 +86,42 @@ create_boundary_ems <- function(data_raw, out_name, ranges, reps,
   prior_var_em <- no_bound_ems$variance[[out_name]]$o_em
   prior_exp_em <- no_bound_ems$expectation[[out_name]]$o_em
   boundary_em <- hmer::Proto_emulator$new(
-    ranges, out_name, bound_exp, bound_cov,
-    em = prior_var_em, analytic = function(y) analytic_sd(y, t_point, out_index),
-    val = 0
+    ranges, out_name, analytics$b_exp, analytics$b_cov,
+    em = prior_var_em, analytic = function(y) analytics$analytic_sd(y, t, out_index, init_vals = model$M),
+    vals = vals, indices = indices
   )
-  gillesp_var <- bound_cov(data[,names(ranges)], em = prior_var_em, full = TRUE) +
+  gillesp_var <- analytics$b_cov(data[,names(ranges)], em = prior_var_em, full = TRUE, vals = vals, indices = indices) +
     purrr::map_dbl(seq_len(nrow(data)), ~prior_var_em$s_diag(data[.,], reps[.]))
   gillesp_var_inv <- tryCatch(chol2inv(chol(gillesp_var)), error = function(e) MASS::ginv(gillesp_var))
-  gillesp_exp_diff <- data$var - b_exp(data[,names(ranges)], prior_var_em, function(y) analytic_sd(y, 15, 3))
+  gillesp_exp_diff <- data$var - analytics$b_exp(data[,names(ranges)], prior_var_em, function(y) analytics$analytic_sd(y, t, out_index, init_vals = model$M),
+                                                 vals = vals, indices = indices)
   
   boundary_bulk_em <- hmer::Proto_emulator$new(
-    ranges, out_name, bound_bulk_exp, bound_bulk_cov, pre_em = prior_var_em,
+    ranges, out_name, bb_data$bb_exp, bb_data$bb_cov, pre_em = prior_var_em,
     b_em = boundary_em, dat = data[,names(ranges)],
     binv = gillesp_var_inv, bmod = gillesp_exp_diff,
-    analytic = function(y) analytic_sd(y, t_point, out_index),
-    val = 0
+    analytic = function(y) analytics$analytic_sd(y, t_point, out_index, init_vals = model$M),
+    vals = vals, indices = indices, bcov = analytics$b_cov
   )
   boundary_em_mean <- hmer::Proto_emulator$new(
-    ranges, out_name, bound_exp, bound_cov, em = prior_exp_em,
-    analytic = function(y) analytic_mean(y, t_point, out_index), val = 0
+    ranges, out_name, analytics$b_exp, analytics$b_cov, em = prior_exp_em,
+    analytic = function(y) analytics$analytic_mean(y, t_point, out_index, init_vals = model$M),
+    vals = vals, indices = indices
   )
   
-  gillesp_e_var <- b_cov(data[,names(ranges)], em = prior_exp_em, full = TRUE) +
+  gillesp_e_var <- analytics$b_cov(data[,names(ranges)], em = prior_exp_em, full = TRUE, vals = vals, indices = indices) +
     purrr::map_dbl(seq_len(nrow(data)), ~boundary_em$get_exp(data[.,])/reps[.])
   gillesp_e_var_inv <- tryCatch(chol2inv(chol(gillesp_e_var)), error = function(e) MASS::ginv(gillesp_e_var))
-  gillesp_e_exp_diff <- data$exp - b_exp(data[,names(ranges)], prior_exp_em, function(y) analytic_mean(y, 15, 3))
+  gillesp_e_exp_diff <- data$exp - analytics$b_exp(data[,names(ranges)], prior_exp_em, function(y) analytics$analytic_mean(y, t, out_index, init_vals = model$M),
+                                                   vals = vals, indices = indices)
   
   boundary_bulk_em_mean <- hmer::Proto_emulator$new(
-    ranges, out_name, bound_bulk_exp, bound_bulk_cov, pre_em = prior_exp_em,
-    implausibility_func = bound_bulk_imp, v_em = boundary_bulk_em,
+    ranges, out_name, bb_data$bb_exp, bb_data$bb_cov, pre_em = prior_exp_em,
+    implausibility_func = bb_data$bb_imp, v_em = boundary_bulk_em,
     b_em = boundary_em_mean, dat = data[,names(ranges)],
     binv = gillesp_e_var_inv, bmod = gillesp_e_exp_diff,
-    analytic = function(y) analytic_mean(y, t_point, out_index), val = 0
+    analytic = function(y) analytics$analytic_mean(y, t_point, out_index, init_vals = data$M),
+    vals = vals, indices = indices, bcov = analytics$b_cov
   )
   
   return(
