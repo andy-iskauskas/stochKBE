@@ -96,6 +96,7 @@ SIR_functions <- list(
     )
   }
 )
+
 SEIR_functions <- list(
   analytic_mean = function(params, t, index, init_vals) {
     if (index != 3) stop("No analytic solution calculated for outputs other than I.")
@@ -115,14 +116,14 @@ SEIR_functions <- list(
     I0 <- init_vals[3]
     E0 <- init_vals[2]
     muep_exp <- exp(-(params[2]+params[4])*t)
-    lim_comb <- params[5]+params[6]+params[4]
+    lim_comb <- params[5]+params[6]-params[4]
     if (lim_comb == 0) return(I0 * muep_exp * (1 - muep_exp) + E0 * params[4] * t * muep_exp * (1 - params[4] * t * muep_exp))
     algaep_exp <- exp(-lim_comb*t)
     mualga_exp <- exp(-(params[2]+params[5]+params[6])*t)
-    comp1 <- params[4]*E0/lim_comb * muep_exp * (1 - algaep_exp)
-    return(comp1 * (1-comp1) + I0 * mualga_exp * (1 - mualga_exp))
+    comp1 <- params[4]/lim_comb * muep_exp * (1 - algaep_exp)
+    return(E0 * comp1 * (1-comp1) + I0 * mualga_exp * (1 - mualga_exp))
   },
-  b_exp = function(x, em, analytic, vals = c(0,0), indices = c(1,2)) {
+  b_exp = function(x, em, analytic, vals = c(0,0), indices = c(3,4)) {
     xK <- x |> dplyr::mutate(across(indices[1], ~vals[1]))
     xL <- x |> dplyr::mutate(across(indices[2], ~vals[2]))
     xKL <- xK |> dplyr::mutate(across(indices[2], ~vals[2]))
@@ -133,7 +134,7 @@ SEIR_functions <- list(
         r1(x, em, vals[1], indices[1]) * r1(x, em, vals[2], indices[2]) * (apply(xKL, 1, analytic) - em$get_exp(xKL))
     )
   },
-  b_cov = function(x, xp = NULL, full = TRUE, em, vals = c(0,0), indices = c(1,2)) {
+  b_cov = function(x, xp = NULL, full = TRUE, em, vals = c(0,0), indices = c(3,4)) {
     xKL <- x |> dplyr::mutate(across(indices[1], ~vals[1])) |> dplyr::mutate(across(indices[2], ~vals[2]))
     if (is.null(xp)) {
       xp <- x

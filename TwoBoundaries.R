@@ -75,7 +75,7 @@ ranges <- list(
 )
 set.seed(1)
 training_points <- data.frame(t(apply(
-  lhs::randomLHS(10*length(ranges), length(ranges)),
+  lhs::randomLHS(20*length(ranges), length(ranges)),
   1, function(x) {
     x * purrr::map_dbl(ranges, diff) + purrr::map_dbl(ranges, ~.[[1]])
   }
@@ -114,5 +114,23 @@ exp_df <- cbind.data.frame(
 )
 exp_df_reshape <- tidyr::pivot_longer(exp_df, cols = !c(1:7))
 ggplot(data = exp_df_reshape[grepl("V", exp_df_reshape$name),], aes(x = beta, y = eps, z = value)) +
+  geom_contour_filled() +
+  facet_wrap(vars(name), nrow = 2)
+
+var_df <- cbind.data.frame(
+  big_grid,
+  data.frame(
+    Ebulk = ems_wave1$no_boundary$variance[[out_name]]$get_exp(big_grid),
+    Vbulk = ems_wave1$no_boundary$variance[[out_name]]$get_cov(big_grid),
+    Ebound = ems_wave1$boundary$variance$get_exp(big_grid),
+    Vbound = ems_wave1$boundary$variance$get_cov(big_grid),
+    Eboth = ems_wave1$boundary_bulk$variance$get_exp(big_grid),
+    Vboth = ems_wave1$boundary_bulk$variance$get_cov(big_grid),
+    Eno = ems_wave1$no_boundary$variance[[out_name]]$o_em$get_exp(big_grid),
+    Vno = ems_wave1$no_boundary$variance[[out_name]]$o_em$get_cov(big_grid)
+  )
+)
+var_df_reshape <- tidyr::pivot_longer(var_df, cols = !c(1:7))
+ggplot(data = var_df_reshape[grepl("E", var_df_reshape$name),], aes(x = beta, y = eps, z = value)) +
   geom_contour_filled() +
   facet_wrap(vars(name), nrow = 2)

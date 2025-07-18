@@ -87,6 +87,21 @@ exp_df <- cbind.data.frame(
 )
 exp_df_reshape <- tidyr::pivot_longer(exp_df, cols = !c(beta, gamma))
 grid_plot(exp_df_reshape, "V", NULL, "Mean", wave0_output, 0.05)
+var_df <- cbind.data.frame(
+  big_grid,
+  data.frame(
+    Ebulk = ems_wave1$no_boundary$variance[[out_name]]$get_exp(big_grid),
+    Vbulk = ems_wave1$no_boundary$variance[[out_name]]$get_cov(big_grid),
+    Ebound = ems_wave1$boundary$variance$get_exp(big_grid),
+    Vbound = ems_wave1$boundary$variance$get_cov(big_grid),
+    Eboth = ems_wave1$boundary_bulk$variance$get_exp(big_grid),
+    Vboth = ems_wave1$boundary_bulk$variance$get_cov(big_grid),
+    Eno = ems_wave1$no_boundary$variance[[out_name]]$o_em$get_exp(big_grid),
+    Vno = ems_wave1$no_boundary$variance[[out_name]]$o_em$get_cov(big_grid)
+  )
+)
+var_df_reshape <- tidyr::pivot_longer(var_df, cols = !c(1:2))
+grid_plot(var_df_reshape, "E", NULL, "Variance", wave0_output, 0.05)
 
 final_vars <- cbind.data.frame(small_test_grid, mean_em_var(small_test_grid, ems_wave1$no_boundary$expectation$I$o_em,
                                                             this_var_em, new_design$points[,1:2], new_design$points$reps)) |>
