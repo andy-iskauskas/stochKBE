@@ -79,10 +79,11 @@ create_boundary_ems <- function(data_raw, out_name, ranges, reps,
   if (length(reps) == 1) reps <- rep(reps, nrow(data))
   no_bound_ems <- hmer::emulator_from_data(data_raw, out_name, ranges,
                                            emulator_type = "variance", 
-                                           specified_priors = list(
-                                             expectation = list(delta = c(0)),
-                                             variance = list(delta = c(0))
-                                           ))
+                                           # specified_priors = list(
+                                           #   expectation = list(delta = c(0.01)),
+                                           #   variance = list(delta = c(0.01))
+                                           # )
+                                           )
   prior_var_em <- no_bound_ems$variance[[out_name]]$o_em
   prior_exp_em <- no_bound_ems$expectation[[out_name]]$o_em
   boundary_em <- hmer::Proto_emulator$new(
@@ -100,12 +101,12 @@ create_boundary_ems <- function(data_raw, out_name, ranges, reps,
     ranges, out_name, bb_data$bb_exp, bb_data$bb_cov, pre_em = prior_var_em,
     b_em = boundary_em, dat = data[,names(ranges)],
     binv = gillesp_var_inv, bmod = gillesp_exp_diff,
-    analytic = function(y) analytics$analytic_sd(y, t_point, out_index, init_vals = model$M),
+    analytic = function(y) analytics$analytic_sd(y, t, out_index, init_vals = model$M),
     vals = vals, indices = indices, bcov = analytics$b_cov
   )
   boundary_em_mean <- hmer::Proto_emulator$new(
     ranges, out_name, analytics$b_exp, analytics$b_cov, em = prior_exp_em,
-    analytic = function(y) analytics$analytic_mean(y, t_point, out_index, init_vals = model$M),
+    analytic = function(y) analytics$analytic_mean(y, t, out_index, init_vals = model$M),
     vals = vals, indices = indices
   )
   
@@ -120,7 +121,7 @@ create_boundary_ems <- function(data_raw, out_name, ranges, reps,
     implausibility_func = bb_data$bb_imp, v_em = boundary_bulk_em,
     b_em = boundary_em_mean, dat = data[,names(ranges)],
     binv = gillesp_e_var_inv, bmod = gillesp_e_exp_diff,
-    analytic = function(y) analytics$analytic_mean(y, t_point, out_index, init_vals = data$M),
+    analytic = function(y) analytics$analytic_mean(y, t, out_index, init_vals = data$M),
     vals = vals, indices = indices, bcov = analytics$b_cov
   )
   

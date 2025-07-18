@@ -75,7 +75,7 @@ ranges <- list(
 )
 set.seed(1)
 training_points <- data.frame(t(apply(
-  lhs::randomLHS(20*length(ranges), length(ranges)),
+  lhs::randomLHS(30*length(ranges), length(ranges)),
   1, function(x) {
     x * purrr::map_dbl(ranges, diff) + purrr::map_dbl(ranges, ~.[[1]])
   }
@@ -96,9 +96,10 @@ big_grid <- expand.grid(
 )
 for (nm in names(ranges)) {
   if (nm != "beta" && nm != "eps")
-    big_grid[,nm] <- mean(ranges[[nm]])
+    big_grid[,nm] <- 0.6*sum(ranges[[nm]])
 }
 big_grid <- big_grid[,names(ranges)]
+
 exp_df <- cbind.data.frame(
   big_grid,
   data.frame(
@@ -113,6 +114,9 @@ exp_df <- cbind.data.frame(
   )
 )
 exp_df_reshape <- tidyr::pivot_longer(exp_df, cols = !c(1:7))
+ggplot(data = exp_df_reshape[grepl("E", exp_df_reshape$name),], aes(x = beta, y = eps, z = value)) +
+  geom_contour_filled() +
+  facet_wrap(vars(name), nrow = 2)
 ggplot(data = exp_df_reshape[grepl("V", exp_df_reshape$name),], aes(x = beta, y = eps, z = value)) +
   geom_contour_filled() +
   facet_wrap(vars(name), nrow = 2)
@@ -131,6 +135,9 @@ var_df <- cbind.data.frame(
   )
 )
 var_df_reshape <- tidyr::pivot_longer(var_df, cols = !c(1:7))
-ggplot(data = var_df_reshape[grepl("E", var_df_reshape$name),], aes(x = beta, y = eps, z = value)) +
-  geom_contour_filled() +
+ggplot(data = var_df_reshape[grepl("E", var_df_reshape$name),], aes(x = beta, y = eps)) +
+  geom_contour_filled(aes(z = value)) +
+  facet_wrap(vars(name), nrow = 2)
+ggplot(data = var_df_reshape[grepl("V", var_df_reshape$name),], aes(x = beta, y = eps)) +
+  geom_contour_filled(aes(z = value)) +
   facet_wrap(vars(name), nrow = 2)

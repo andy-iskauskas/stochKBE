@@ -11,7 +11,7 @@ r1 <- function(pts, em, val = 0, index = 1) {
   ref_pt <- data.frame(matrix(rep(0, length(pts)), nrow = 1)) |> setNames(names(pts))
   ref_pt[,index] <- val
   return(
-    em$get_cov(pts, ref_pt, full = TRUE)/em$u_sigma^2
+    em$get_cov(pts, ref_pt, full = TRUE, check_neg = FALSE)/em$u_sigma^2
   )
 }
 ## Shorthand function for R_1(x,x')=r_1(x-x')-r_1(x)r_1(x')
@@ -128,10 +128,10 @@ SEIR_functions <- list(
     xL <- x |> dplyr::mutate(across(indices[2], ~vals[2]))
     xKL <- xK |> dplyr::mutate(across(indices[2], ~vals[2]))
     return(
-      em$get_exp(x) +
-        r1(x, em, vals[1], indices[1]) * (apply(xK, 1, analytic) - em$get_exp(xK)) +
-        r1(x, em, vals[2], indices[2]) * (apply(xL, 1, analytic) - em$get_exp(xL)) -
-        r1(x, em, vals[1], indices[1]) * r1(x, em, vals[2], indices[2]) * (apply(xKL, 1, analytic) - em$get_exp(xKL))
+      em$get_exp(x, check_neg = FALSE) +
+        r1(x, em, vals[1], indices[1]) * (apply(xK, 1, analytic) - em$get_exp(xK, check_neg = FALSE)) +
+        r1(x, em, vals[2], indices[2]) * (apply(xL, 1, analytic) - em$get_exp(xL, check_neg = FALSE)) -
+        r1(x, em, vals[1], indices[1]) * r1(x, em, vals[2], indices[2]) * (apply(xKL, 1, analytic) - em$get_exp(xKL, check_neg = FALSE))
     )
   },
   b_cov = function(x, xp = NULL, full = TRUE, em, vals = c(0,0), indices = c(3,4)) {
@@ -142,10 +142,10 @@ SEIR_functions <- list(
     }
     else xpKL <- xp |> dplyr::mutate(across(indices[1], ~vals[1])) |> mutate(across(indices[2], ~vals[2]))
     if (full) return(
-      R1(x, xp, em, vals[1], indices[1]) * R1(x, xp, em, vals[2], indices[2]) * em$get_cov(xKL, xpKL, full = TRUE)
+      R1(x, xp, em, vals[1], indices[1]) * R1(x, xp, em, vals[2], indices[2]) * em$get_cov(xKL, xpKL, full = TRUE, check_neg = FALSE)
     )
     return(
-      purrr::map_dbl(seq_len(nrow(x)), ~R1(x[.,], xp[.,], em, vals[1], indices[1]) * R1(x[.,], xp[.,], em, vals[2], indices[2]))*em$get_cov(xKL, xpKL)
+      purrr::map_dbl(seq_len(nrow(x)), ~R1(x[.,], xp[.,], em, vals[1], indices[1]) * R1(x[.,], xp[.,], em, vals[2], indices[2]))*em$get_cov(xKL, xpKL, check_neg = FALSE)
     )
   }
 )
