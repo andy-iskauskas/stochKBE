@@ -38,7 +38,7 @@ redgreen <- c('#00FF00', '#18FF00', '#31FF00', '#49FF00', '#62FF00',
 # a title prefix, training points (if wanted to overlay those), and a distance from
 # the slice beyond which points are plotted in grey
 grid_plot <- function(data, prefix, omega_pt = NULL, title_add = "", training_pts = NULL, pt_dist = Inf,
-                      breaks = NULL) {
+                      breaks = NULL, labels = NULL) {
   if (prefix == "E") p_title <- paste(title_add, "Emulator Expectation")
   if (prefix == "V") p_title <- paste(title_add, "Emulator Variance")
   if (prefix == "I") p_title <- paste(title_add, "Emulator Implausibility")
@@ -53,8 +53,12 @@ grid_plot <- function(data, prefix, omega_pt = NULL, title_add = "", training_pt
         scale_fill_viridis(discrete = TRUE) + guides(fill = guide_legend(ncol = 1))
     }
     else {
-      g <- g + geom_contour_filled(aes(z = value), breaks = breaks) +
-        scale_fill_viridis(discrete = TRUE) + guides(fill = guide_legend(ncol = 1))
+      if (is.null(labels))
+        g <- g + geom_contour_filled(aes(z = value), breaks = breaks) +
+          scale_fill_viridis(discrete = TRUE) + guides(fill = guide_legend(ncol = 1))
+      else
+        g <- g + geom_contour_filled(aes(z = value), breaks = breaks) +
+          scale_fill_viridis(discrete = TRUE, labels = labels) + guides(fill = guide_legend(ncol = 1))
     }
   }
   else {

@@ -86,7 +86,8 @@ exp_df <- cbind.data.frame(
   )
 )
 exp_df_reshape <- tidyr::pivot_longer(exp_df, cols = !c(beta, gamma))
-grid_plot(exp_df_reshape, "V", NULL, "Mean", wave0_output, 0.05)
+grid_plot(exp_df_reshape, "E", NULL, "Mean", wave0_output, 0.05)
+grid_plot(exp_df_reshape, "V", NULL, "Mean", wave0_output, 0.05, breaks = c(0, 5, 10, 50, 100, 500, 1000, 1500, 2500, 5000))# + theme(legend.position = "none")
 var_df <- cbind.data.frame(
   big_grid,
   data.frame(
@@ -101,7 +102,13 @@ var_df <- cbind.data.frame(
   )
 )
 var_df_reshape <- tidyr::pivot_longer(var_df, cols = !c(1:2))
-grid_plot(var_df_reshape, "E", NULL, "Variance", wave0_output, 0.05)
+grid_plot(var_df_reshape, "E", NULL, "Variance", wave0_output, 0.05, breaks = c(-50, 50, 100, 200, 300, 400, 500, 1000),
+          labels = c("[0,50)", "[50,100)", "[100,200)", "[200,300)", "[300,400)", "[400,500)", "[500,1000)"))
+grid_plot(var_df_reshape, "V", NULL, "Variance", wave0_output, 0.05, 
+          breaks = c(0, 1000, 5000, 10000, 20000, 30000, 40000, 50000, 100000),
+          labels = c("[0, 1000)", "[1000, 5000)", "[5000, 10000)", "[10000, 20000)", "[20000, 30000)",
+                     "[30000, 40000)", "[40000, 50000)", "[50000, 100000)"))# + theme(legend.position = "none")
+
 
 final_vars <- cbind.data.frame(small_test_grid, mean_em_var(small_test_grid, ems_wave1$no_boundary$expectation$I$o_em,
                                                             this_var_em, new_design$points[,1:2], new_design$points$reps)) |>
