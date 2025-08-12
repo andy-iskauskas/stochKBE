@@ -17,6 +17,8 @@ r1 <- function(pts, em, val = 0, index = 1) {
 ## Shorthand function for R_1(x,x')=r_1(x-x')-r_1(x)r_1(x')
 R1 <- function(p1, p2, em, val = 0, index = 1) {
   if(missing(p2)) p2 <- p1
+  if (length(index) == 2)
+    return(R1(p1, p2, em, val, index[1]) * R1(p1, p2, em, val, index[2]))
   outer(seq_len(nrow(p1)), seq_len(nrow(p2)), function(i,j) {
     r1(p1[i,]-p2[j,], em, val, index) - r1(p1[i,], em, val, index)*r1(p2[j,], em, val, index)
   })

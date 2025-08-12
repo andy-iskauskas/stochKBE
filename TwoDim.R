@@ -54,6 +54,7 @@ this_var_em <- ems_wave1$boundary_bulk$variance
 ## Create a 20x20 grid of points to evaluate mean emulator variance on
 small_test_grid <- expand.grid(beta = seq(0, 1.5, length.out = 20), gamma = seq(0, 0.5, length.out = 20))
 ## Create design for next wave of emulation
+source("baseFunctions.R")
 new_design <- design_subselect(training_points,
                           ems_wave1$no_boundary$expectation$I$o_em, this_var_em,
                           rep(10, 20), ranges, small_test_grid, rep_max = 400, pt_max = 40,
@@ -177,7 +178,7 @@ anim_alt <- ggplot(data = trans_df, aes(x = beta, y = gamma)) +
   theme(legend.position = "none") +
   ggtitle("Repetitions Placed: {frame_time}")
 animate(anim_alt, nframes = 200, end_pause = 25, height = 800, width = 800)
-anim_save("PropAnim2dAlt.gif", animation = anim_alt)
+anim_save("PropAnim2dAltAug.gif", animation = anim_alt)
 save.image(file = "May13.RData")
 
 

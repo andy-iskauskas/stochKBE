@@ -43,6 +43,26 @@ gillespied=function (N, T=400, dt=1, ...)
   }
 }
 
+## Partition Inverse for augmented matrix
+# Given an nxn covariance matrix with pre-calculated inverse ainv, and an 
+# additional point to be included, calculates the inverse of the augmented
+# (n+1)x(n+1) covariance matrix, where b is the covariance between the new point
+# and all previous points, and c is the variance of the new point.
+# This is a more efficient way to calculate the inverse for all but the smallest
+# covariance matrices (any more than ~70 points).
+part_inv <- function(ainv, b, c) {
+  invfact <- c - mahalanobis(t(b), center = FALSE, cov = ainv, inverted = TRUE)
+  multi <- c(ainv %*% b)
+  elem1 <- ainv + outer(multi, multi, "*")/invfact
+  elemsym <- -multi/invfact
+  out_mat <- matrix(0, nrow = nrow(ainv)+1, ncol = ncol(ainv)+1)
+  out_mat[1:nrow(ainv), 1:ncol(ainv)] <- elem1
+  out_mat[nrow(ainv)+1, 1:ncol(ainv)] <- t(elemsym)
+  out_mat[1:nrow(ainv), ncol(ainv)+1] <- elemsym
+  out_mat[nrow(ainv)+1, ncol(ainv)+1] <- 1/invfact
+  return(out_mat)
+}
+
 ## Obtain sanitised results from Gillespie algorithm
 # Takes params (a collection of input parameters), nreps (number of
 # repetitions at the parameter set), outs (the output compartments
@@ -147,40 +167,75 @@ inverse = function (f, lower = -5, upper = 10, xmin, xmax, theta) {
 ## Scoring functions for variance reduction
 # Calculate the mean emulator variance across the space, using a representative
 # collection of points.
-mean_em_var <- function(pt, pre_em, var_em, data, reps, boundary_col = 1, boundary_val = 0) {
-  em_prior_var <- pre_em$u_sigma^2
-  datamutate <- (data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
+mean_em_var <- function(pt, pre_em, var_em, data, reps, boundary_col = 1, boundary_val = 0, 
+                        invmat, new_point = NULL, new_rep = NULL, new_method = (nrow(data) > 70)) {
+  if (!is.null(new_point)) {
+    n_data <- rbind.data.frame(data, new_point)
+    datamutate <- (n_data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
+  }
+  else {
+    datamutate <- (data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
+  }
   ptmutate <- (pt |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
-  datarminus <- pre_em$get_cov(datamutate, full = TRUE)/em_prior_var
-  term1 <- em_prior_var * (1-r1(pt, pre_em)^2)
-  term2a <- R1(pt, data, pre_em) * pre_em$get_cov(ptmutate, datamutate, full = TRUE)
-  term2c <- R1(data, pt, pre_em) * pre_em$get_cov(datamutate, ptmutate, full = TRUE)
-  var_em_vals <- var_em$get_exp(data)
-  var_em_vals[var_em_vals < 0] <- 1e-6
-  term2binv <- R1(data, data, pre_em) * pre_em$get_cov(datamutate, datamutate, full = TRUE) +
-    diag(c(1/reps * var_em_vals))
-  term2b <- tryCatch(chol2inv(chol(term2binv)),
-                     error = function(e) MASS::ginv(term2binv))
-  term2 <- term2a %*% term2b %*% term2c
-  complete <- term1 - diag(term2)
+  term1 <- pre_em$u_sigma^2 * (1-r1(pt, pre_em)^2)
+  if (!is.null(new_point) && new_method) {
+    npmutate <- (new_point |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
+    term2a <- R1(pt, n_data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(ptmutate, datamutate, full = TRUE)
+    var_em_val_add <- var_em$get_exp(new_point)
+    if (var_em_val_add < 0) var_em_val_add <- 1e-6
+    b <- R1(data, new_point, pre_em, boundary_val, boundary_col) * pre_em$get_cov(datamutate[-nrow(datamutate),], npmutate)
+    c <- as.numeric(R1(new_point, new_point, pre_em, boundary_val, boundary_col) * pre_em$get_cov(npmutate) +
+      var_em_val_add/reps[length(reps)])
+    term2b <- part_inv(invmat, b, c)
+  }
+  else if (!is.null(new_rep) && new_method) {
+    rep_ind <- which(new_rep != 0)
+    modif <- new_rep[rep_ind]/(reps[rep_ind]*(reps+new_rep)[rep_ind])
+    term2a <- R1(pt, data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(ptmutate, datamutate, full = TRUE)
+    var_em_val <- var_em$get_exp(data[rep_ind,,drop=FALSE])
+    if (var_em_val < 0) var_em_val <- 1e-6
+    uval <- as.numeric(sqrt(modif * var_em_val))
+    denom <- 1 - uval^2 * invmat[,rep_ind]
+    num <- uval * outer(c(invmat[rep_ind,]), c(invmat[rep_ind,]), "*")
+    term2b <- invmat + num/denom
+  }
+  else {
+    if (!is.null(new_rep)) reps <- reps + new_rep
+    if (!is.null(new_point)) data <- rbind.data.frame(data, new_point)
+    term2a <- R1(pt, data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(ptmutate, datamutate, full = TRUE)
+    var_em_vals <- var_em$get_exp(data)
+    var_em_vals[var_em_vals < 0] <- 1e-6
+    term2binv <- R1(data, data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(datamutate, datamutate, full = TRUE) +
+      diag(c(1/reps * var_em_vals))
+    term2b <- tryCatch(chol2inv(chol(term2binv)),
+                       error = function(e) MASS::ginv(term2binv))
+  }
+  diag_res <- colSums(t(term2a %*% term2b) * t(term2a))
+  complete <- term1 - diag_res
   complete[complete < 0] <- 1e-6
-  return(complete)
+  print(mean(complete))
+  return(mean(complete))
 }
 # Calculate the score due to including a new design point
-new_point_score <- function(point, points, pre_em, var_em, reps, grid, ntoadd = 1) {
-  new_data <- rbind.data.frame(points, point)
-  if (is.null(point))
+new_point_score <- function(point, points, pre_em, var_em, reps, grid, invmat, ntoadd = 1,
+                            boundary_col, boundary_val) {
+  #new_data <- rbind.data.frame(points, point)
+  if (is.null(point)) {
+    warning("Point is NULL.")
     new_reps <- reps
+  }
   else
     new_reps <- c(reps, ntoadd)
-  vars <- mean(mean_em_var(grid, pre_em, var_em, new_data, new_reps))
+  vars <- mean_em_var(grid, pre_em, var_em, points, new_reps, boundary_col, boundary_val, invmat, point)
   return(vars)
 }
 # Calculate the score due to adding a repetition at an existing design point
-new_rep_score <- function(index, points, pre_em, var_em, reps, grid, ntoadd = 1) {
-  new_reps <- reps
-  new_reps[index] <- new_reps[index]+ntoadd
-  vars <- mean(mean_em_var(grid, pre_em, var_em, points, new_reps))
+new_rep_score <- function(index, points, pre_em, var_em, reps, grid, invmat, ntoadd = 1,
+                          boundary_col, boundary_val) {
+  new_reps <- rep(0, length(reps))
+  new_reps[index] <- ntoadd
+  vars <- mean_em_var(grid, pre_em, var_em, points, reps, boundary_col,
+                      boundary_val, invmat, new_rep = new_reps)
   return(vars)
 }
 
@@ -194,17 +249,27 @@ new_rep_score <- function(index, points, pre_em, var_em, reps, grid, ntoadd = 1)
 design_subselect <- function(data, pre_em, var_em, reps, ranges, testgrid,
                               rep_max, pt_max, ntoadd = 1,
                               store_order = FALSE, verbose = FALSE,
-                              return_scores = FALSE) {
+                              return_scores = FALSE, boundary_col = 1, boundary_val = 0) {
   if (store_order) order_vector <- c()
   if (return_scores) {
     r_scores <- c()
     p_scores <- c()
   }
-  find_next_point <- function(data, pre_em, var_em, reps, ranges, ntoadd) {
+  find_next_point <- function(data, pre_em, var_em, reps, ranges, ntoadd, boundary_col, boundary_val) {
+    datamutate <- (data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
+    v_em_vals <- var_em$get_exp(data)
+    v_em_vals[v_em_vals < 0] <- 1e-6
+    start_inv <- R1(data, data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(datamutate, full = TRUE) +
+      diag(c(1/v_em_vals * reps))
+    start <- tryCatch(
+      chol2inv(chol(start_inv)),
+      error = function(e) MASS::ginv(start_inv)
+    )
     opt_func <- function(x) {
       x_mod <- data.frame(matrix(x, nrow = 1)) |> setNames(names(ranges))
       x_mod <- x_mod[,names(ranges), drop = FALSE]
-      new_point_score(x_mod, data, pre_em, var_em, reps, testgrid, ntoadd)
+      new_point_score(x_mod, data, pre_em, var_em, reps, testgrid, start, ntoadd,
+                      boundary_col, boundary_val)
     }
     optimised <- optim(purrr::map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
                        lower = purrr::map_dbl(ranges, ~.[[1]]+0.01*diff(.)),
@@ -219,17 +284,26 @@ design_subselect <- function(data, pre_em, var_em, reps, ranges, testgrid,
     if (any(dists < 1e-6)) this_val <- NaN
     return(list(val = this_val, point = this_pt))
   }
-  find_next_rep <- function(data, pre_em, var_em, reps, ntoadd) {
+  find_next_rep <- function(data, pre_em, var_em, reps, ntoadd, boundary_col, boundary_val) {
+    datamutate <- (data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
+    v_em_vals <- var_em$get_exp(data)
+    v_em_vals[v_em_vals < 0] <- 1e-6
+    start_inv <- R1(data, data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(datamutate, full = TRUE) +
+      diag(c(1/v_em_vals * reps))
+    start <- tryCatch(
+      chol2inv(chol(start_inv)),
+      error = function(e) MASS::ginv(start_inv)
+    )
     rep_vals <- purrr::map_dbl(seq_len(nrow(data)), function(i) {
-      new_rep_score(i, data, pre_em, var_em, reps, testgrid, ntoadd)
+      new_rep_score(i, data, pre_em, var_em, reps, testgrid, start, ntoadd, boundary_col, boundary_val)
     })
     return(list(val = min(rep_vals), index = which.min(rep_vals)))
   }
   failsafe <- 0
   while(sum(reps) < rep_max && failsafe < 1000) {
-    rep_suggest <- find_next_rep(data, pre_em, var_em, reps, ntoadd)
+    rep_suggest <- find_next_rep(data, pre_em, var_em, reps, ntoadd, boundary_col, boundary_val)
     if (nrow(data) < pt_max)
-      pt_suggest <- find_next_point(data, pre_em, var_em, reps, ranges, ntoadd)
+      pt_suggest <- find_next_point(data, pre_em, var_em, reps, ranges, ntoadd, boundary_col, boundary_val)
     else
       pt_suggest <- NULL
     if (verbose) {
