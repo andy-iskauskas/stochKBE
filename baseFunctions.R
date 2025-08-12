@@ -195,8 +195,8 @@ mean_em_var <- function(pt, pre_em, var_em, data, reps, boundary_col = 1, bounda
     var_em_val <- var_em$get_exp(data[rep_ind,,drop=FALSE])
     if (var_em_val < 0) var_em_val <- 1e-6
     uval <- as.numeric(sqrt(modif * var_em_val))
-    denom <- 1 - uval^2 * invmat[,rep_ind]
-    num <- uval * outer(c(invmat[rep_ind,]), c(invmat[rep_ind,]), "*")
+    denom <- 1 - uval^2 * invmat[rep_ind,rep_ind]
+    num <- uval^2 * outer(c(invmat[rep_ind,]), c(invmat[rep_ind,]), "*")
     term2b <- invmat + num/denom
   }
   else {
@@ -205,15 +205,14 @@ mean_em_var <- function(pt, pre_em, var_em, data, reps, boundary_col = 1, bounda
     term2a <- R1(pt, data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(ptmutate, datamutate, full = TRUE)
     var_em_vals <- var_em$get_exp(data)
     var_em_vals[var_em_vals < 0] <- 1e-6
-    term2binv <- R1(data, data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(datamutate, datamutate, full = TRUE) +
+    term2binv <- R1(data, data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(datamutate, full = TRUE) +
       diag(c(1/reps * var_em_vals))
     term2b <- tryCatch(chol2inv(chol(term2binv)),
                        error = function(e) MASS::ginv(term2binv))
   }
-  diag_res <- colSums(t(term2a %*% term2b) * t(term2a))
+  diag_res <- mahalanobis(term2a, center = FALSE, cov = term2b, inverted = TRUE)
   complete <- term1 - diag_res
   complete[complete < 0] <- 1e-6
-  print(mean(complete))
   return(mean(complete))
 }
 # Calculate the score due to including a new design point

@@ -7,21 +7,31 @@ source("baseFunctions.R")
 ## Shorthand function for r_1(x)
 r1 <- function(pts, em, val = 0, index = 1) {
   if (!is.data.frame(pts)) pts <- data.frame(pts)
-  pts <- pts |> dplyr::mutate(across(seq_len(length(pts))[-index], ~val))
+  pts[,-index] <- 0
+  #pts <- pts |> dplyr::mutate(across(seq_len(length(pts))[-index], ~0))
   ref_pt <- data.frame(matrix(rep(0, length(pts)), nrow = 1)) |> setNames(names(pts))
   ref_pt[,index] <- val
   return(
-    em$get_cov(pts, ref_pt, full = TRUE, check_neg = FALSE)/em$u_sigma^2
+    t(em$get_cov(ref_pt, pts, check_neg = FALSE)/em$u_sigma^2)
   )
 }
 ## Shorthand function for R_1(x,x')=r_1(x-x')-r_1(x)r_1(x')
 R1 <- function(p1, p2, em, val = 0, index = 1) {
   if(missing(p2)) p2 <- p1
-  if (length(index) == 2)
-    return(R1(p1, p2, em, val, index[1]) * R1(p1, p2, em, val, index[2]))
-  outer(seq_len(nrow(p1)), seq_len(nrow(p2)), function(i,j) {
-    r1(p1[i,]-p2[j,], em, val, index) - r1(p1[i,], em, val, index)*r1(p2[j,], em, val, index)
-  })
+  if (length(index) > 1) {
+    return(do.call("*", purrr::map(index, ~R1(p1, p2, em, val, .))))
+  }
+  p1r <- c(r1(p1, em, val, index))
+  p2r <- c(r1(p2, em, val, index))
+  all_pts <- c(outer(p1[,index], p2[,index], "-"))
+  pt_df <- data.frame(matrix(0, nrow = length(all_pts), ncol = ncol(p1))) |> setNames(names(p1))
+  pt_df[,index] <- all_pts
+  p12r <- matrix(c(r1(pt_df, em, val, index)), byrow = FALSE, nrow = nrow(p1))
+  # p12r <- outer(seq_len(nrow(p1)), seq_len(nrow(p2)), function(i,j) {
+  #   r1(p1[i,]-p2[j,], em, val, index)
+  # })
+  # print(dim(p12r))
+  p12r - outer(p1r, p2r, "*")
 }
 
 ## SIR Model - Single Boundary
@@ -125,29 +135,29 @@ SEIR_functions <- list(
     comp1 <- params[4]/lim_comb * muep_exp * (1 - algaep_exp)
     return(E0 * comp1 * (1-comp1) + I0 * mualga_exp * (1 - mualga_exp))
   },
-  b_exp = function(x, em, analytic, vals = c(0,0), indices = c(3,4)) {
-    xK <- x |> dplyr::mutate(across(indices[1], ~vals[1]))
-    xL <- x |> dplyr::mutate(across(indices[2], ~vals[2]))
-    xKL <- xK |> dplyr::mutate(across(indices[2], ~vals[2]))
+  b_exp = function(x, em, analytic, vals = 0, indices = c(3,4)) {
+    xK <- x |> dplyr::mutate(across(indices[1], ~vals))
+    xL <- x |> dplyr::mutate(across(indices[2], ~vals))
+    xKL <- xK |> dplyr::mutate(across(indices[2], ~vals))
     return(
       em$get_exp(x, check_neg = FALSE) +
-        r1(x, em, vals[1], indices[1]) * (apply(xK, 1, analytic) - em$get_exp(xK, check_neg = FALSE)) +
-        r1(x, em, vals[2], indices[2]) * (apply(xL, 1, analytic) - em$get_exp(xL, check_neg = FALSE)) -
-        r1(x, em, vals[1], indices[1]) * r1(x, em, vals[2], indices[2]) * (apply(xKL, 1, analytic) - em$get_exp(xKL, check_neg = FALSE))
+        r1(x, em, vals, indices[1]) * (apply(xK, 1, analytic) - em$get_exp(xK, check_neg = FALSE)) +
+        r1(x, em, vals, indices[2]) * (apply(xL, 1, analytic) - em$get_exp(xL, check_neg = FALSE)) -
+        r1(x, em, vals, indices[1]) * r1(x, em, vals, indices[2]) * (apply(xKL, 1, analytic) - em$get_exp(xKL, check_neg = FALSE))
     )
   },
-  b_cov = function(x, xp = NULL, full = TRUE, em, vals = c(0,0), indices = c(3,4)) {
-    xKL <- x |> dplyr::mutate(across(indices[1], ~vals[1])) |> dplyr::mutate(across(indices[2], ~vals[2]))
+  b_cov = function(x, xp = NULL, full = TRUE, em, vals = 0, indices = c(3,4)) {
+    xKL <- x |> dplyr::mutate(across(indices[1], ~vals)) |> dplyr::mutate(across(indices[2], ~vals))
     if (is.null(xp)) {
       xp <- x
       xpKL <- xKL
     }
-    else xpKL <- xp |> dplyr::mutate(across(indices[1], ~vals[1])) |> mutate(across(indices[2], ~vals[2]))
+    else xpKL <- xp |> dplyr::mutate(across(indices[1], ~vals)) |> mutate(across(indices[2], ~vals))
     if (full) return(
-      R1(x, xp, em, vals[1], indices[1]) * R1(x, xp, em, vals[2], indices[2]) * em$get_cov(xKL, xpKL, full = TRUE, check_neg = FALSE)
+      R1(x, xp, em, vals, indices) * em$get_cov(xKL, xpKL, full = TRUE, check_neg = FALSE)
     )
     return(
-      purrr::map_dbl(seq_len(nrow(x)), ~R1(x[.,], xp[.,], em, vals[1], indices[1]) * R1(x[.,], xp[.,], em, vals[2], indices[2]))*em$get_cov(xKL, xpKL, check_neg = FALSE)
+      purrr::map_dbl(seq_len(nrow(x)), ~R1(x[.,], xp[.,], em, vals, indices)) * em$get_cov(xKL, xpKL, check_neg = FALSE)
     )
   }
 )

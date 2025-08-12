@@ -88,7 +88,7 @@ wave0_output <- data.frame(wave0_results |> dplyr::group_by(across(all_of(names(
 
 ## Make the emulators
 ems_wave1 <- create_boundary_ems(wave0_results, out_name, ranges, reps,
-                                 SEIR_functions, bb_data, N_SEIR, c(0,0), c(3,4), out_index, t_point)
+                                 SEIR_functions, bb_data, N_SEIR, 0, c(3,4), out_index, t_point)
 
 big_grid <- expand.grid(
   beta = seq(ranges$beta[1], ranges$beta[2], length.out = 20),
@@ -143,11 +143,12 @@ ggplot(data = var_df_reshape[grepl("V", var_df_reshape$name),], aes(x = beta, y 
   facet_wrap(vars(name), nrow = 2)
 
 
-## Create a 20x20 grid of points to evaluate mean emulator variance on
+## Create a collection of points on which to evaluate emulator variance
 test_lhs <- lhs::randomLHS(1000, length(ranges))
 small_test_grid <- data.frame(t(apply(test_lhs, 1, function(x) {
   x * purrr:::map_dbl(ranges, diff) + purrr::map_dbl(ranges, ~.[[1]])
 }))) |> setNames(names(ranges))
+
 ## Create design for next wave of emulation
 this_var_em <- ems_wave1$boundary_bulk$variance
 new_design <- design_subselect(training_points,
@@ -155,5 +156,7 @@ new_design <- design_subselect(training_points,
                                rep(10, nrow(training_points)), ranges, small_test_grid,
                                rep_max = 20*nrow(training_points), pt_max = 2*nrow(training_points),
                                store_order = TRUE, verbose = TRUE, return_scores = TRUE, ntoadd = 2,
-                               boundary_col = c(1,4), boundary_val = 0
+                               boundary_col = c(3,4), boundary_val = 0
                                )
+
+
