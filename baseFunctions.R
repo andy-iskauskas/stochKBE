@@ -9,6 +9,8 @@ library(purrr)
 library(dplyr)
 library(hmer)
 library(MASS)
+library(optimParallel)
+library(future)
 ## Gillespie algorithm for obtaining model realisations
 # N is a list containing initial compartment numbers,
 # pre- and post-transition matrices, and hazard function
@@ -270,10 +272,10 @@ design_subselect <- function(data, pre_em, var_em, reps, ranges, testgrid,
       new_point_score(x_mod, data, pre_em, var_em, reps, testgrid, start, ntoadd,
                       boundary_col, boundary_val)
     }
-    optimised <- optim(purrr::map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
+    optimised <- optimParallel(purrr::map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
                        lower = purrr::map_dbl(ranges, ~.[[1]]+0.01*diff(.)),
                        upper = purrr::map_dbl(ranges, ~.[[2]]-0.01*diff(.)),
-                       method = "L-BFGS-B", control = list(trace = FALSE))
+                       control = list(trace = FALSE))
     this_val <- optimised$value
     this_pt <- data.frame(matrix(optimised$par, nrow = 1)) |> setNames(names(ranges))
     dists <- apply(data, 1, function(x) {
@@ -293,7 +295,7 @@ design_subselect <- function(data, pre_em, var_em, reps, ranges, testgrid,
       chol2inv(chol(start_inv)),
       error = function(e) MASS::ginv(start_inv)
     )
-    rep_vals <- purrr::map_dbl(seq_len(nrow(data)), function(i) {
+    rep_vals <- furrr::future_map_dbl(seq_len(nrow(data)), function(i) {
       new_rep_score(i, data, pre_em, var_em, reps, testgrid, start, ntoadd, boundary_col, boundary_val)
     })
     return(list(val = min(rep_vals), index = which.min(rep_vals)))
