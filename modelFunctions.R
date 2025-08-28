@@ -169,11 +169,11 @@ bb_exp <- function(x, b_em, pre_em, dat, binv, bmod, bcov, analytic, vals = c(0)
     output_vals <- c()
     for (i in 1:ceiling(nrow(x)/1000)) {
       px <- x[(1000*(i-1)+1):min(1000*i, nrow(x)),]
-      output_vals <- c(output_vals, bb_exp(px, b_em, pre_em, dat, binv, bmod, analytic, vals, indices))
+      output_vals <- c(output_vals, bb_exp(px, b_em, pre_em, dat, binv, bmod, bcov, analytic, vals, indices))
     }
     return(output_vals)
   }
-  b_em$get_exp(x) + bcov(x, dat, pre_em, full = TRUE, vals = vals, indices = indices) %*%
+  b_em$get_exp(x) + bcov(x = x, xp = dat, em = pre_em, full = TRUE, vals = vals, indices = indices) %*%
     binv %*% bmod
 }
 
@@ -183,15 +183,15 @@ bb_cov <- function(x, xp = NULL, full = TRUE, b_em, pre_em, dat, binv, bcov, ana
     output_vals <- c()
     for (i in 1:ceiling(nrow(x)/1000)) {
       px <- x[(1000*(i-1)+1):min(1000*i, nrow(x)),]
-      output_vals <- c(output_vals, bb_cov(px, xp, full, b_em, pre_em, dat, binv, analytic, vals, indices))
+      output_vals <- c(output_vals, bb_cov(px, xp, full, b_em, pre_em, dat, binv, bcov, analytic, vals, indices))
     }
     return(output_vals)
   }
-  cov_mat <- bcov(x, dat, pre_em, full = TRUE, vals = vals, indices = indices)
+  cov_mat <- bcov(x = x, xp = dat, em = pre_em, full = TRUE, vals = vals, indices = indices)
   if (is.null(xp))
     cov_mat_p <- cov_mat
   else
-    cov_mat_p <- bcov(xp, dat, pre_em, full = TRUE, vals = vals, indices = indices)
+    cov_mat_p <- bcov(x = xp, xp = dat, em = pre_em, full = TRUE, vals = vals, indices = indices)
   if (full)
     return(b_em$get_cov(x, xp, full = TRUE) - cov_mat %*% binv %*% t(cov_mat_p))
   return(b_em$get_cov(x) - diag(cov_mat %*% binv %*% t(cov_mat_p)))

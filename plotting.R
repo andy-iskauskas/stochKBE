@@ -37,16 +37,13 @@ redgreen <- c('#00FF00', '#18FF00', '#31FF00', '#49FF00', '#62FF00',
 # Takes data to plot, data prefix to identify columns, the omega value to slice at,
 # a title prefix, training points (if wanted to overlay those), and a distance from
 # the slice beyond which points are plotted in grey
-grid_plot <- function(data, prefix, omega_pt = NULL, title_add = "", training_pts = NULL, pt_dist = Inf,
+grid_plot <- function(data, prefix, plot_names = c("beta", "gamma"), title_add = "", training_pts = NULL,
                       breaks = NULL, labels = NULL) {
   if (prefix == "E") p_title <- paste(title_add, "Emulator Expectation")
   if (prefix == "V") p_title <- paste(title_add, "Emulator Variance")
   if (prefix == "I") p_title <- paste(title_add, "Emulator Implausibility")
-  if (!is.null(omega_pt))
-    g <- ggplot(data = subset(data[grep(prefix, data$name),], omega == omega_pt),
-                aes(x = beta, y = gamma))
-  else
-    g <- ggplot(data = data[grep(prefix, data$name),], aes(x = beta, y = gamma))
+  dat_subs <- data[grep(prefix, data$name),]
+  g <- ggplot(data = dat_subs, aes(x = .data[[plot_names[1]]], y = .data[[plot_names[2]]]))
   if (prefix != "I") {
     if (is.null(breaks)) {
       g <- g + geom_contour_filled(aes(z = value)) +
@@ -68,14 +65,26 @@ grid_plot <- function(data, prefix, omega_pt = NULL, title_add = "", training_pt
                                guide = guide_legend(ncol = 1, reverse = TRUE))
   }
   if (!is.null(training_pts)) {
-    if (!is.null(omega_pt))
-      g <- g + geom_point(data = subset(training_pts, abs(omega - omega_pt) < pt_dist)) +
-        geom_point(data = subset(training_pts, abs(omega - omega_pt) > pt_dist), col = "grey40",
-                   pch = 4, cex = 0.5)
-    else
-      g <- g + geom_point(data = training_pts)
+    g <- g + geom_point(data = training_pts)
   }
   g <- g + facet_wrap(vars(name), nrow = 2, ncol = 2, labeller = plot_labels) +
     labs(title = p_title)
   return(g)
+}
+
+comparison_plot <- function(data, facet_names, plot_names = c("beta", "gamma"), 
+                            levels_name = "level", breaks = NULL, labels = NULL) {
+  data_reshape <- tidyr::pivot_longer(data, cols = all_of(facet_names))
+  data_reshape$name <- factor(data_reshape$name, levels = facet_names)
+  g <- ggplot(data = data_reshape, aes(x = .data[[plot_names[1]]], y = .data[[plot_names[2]]], z = value))
+  if (!is.null(breaks)) {
+    g <- g + geom_contour_filled(breaks = breaks)
+    if (!is.null(labels))
+      g <- g + scale_fill_viridis(discrete = TRUE, labels = labels, name = levels_name)
+    else
+      g <- g + scale_fill_viridis(discrete = TRUE, name = levels_name)
+  }
+  else
+    g <- g + geom_contour_filled() + scale_fill_viridis(discrete = TRUE, name = levels_name)
+  return(g + guides(fill = guide_legend(ncol = 1)) + facet_wrap(vars(name), nrow = 2))
 }

@@ -1,8 +1,8 @@
 ###############################
 # Emulation of SIR Model - 2d #
 ###############################
-
 source("modelFunctions.R")
+source("baseFunctions.R")
 source("plotting.R")
 library(lhs)
 library(tidyr)
@@ -52,9 +52,13 @@ ems_wave1 <- create_boundary_ems(wave0_results, out_name, ranges, reps,
 this_var_em <- ems_wave1$boundary_bulk$variance
 
 ## Create a 20x20 grid of points to evaluate mean emulator variance on
-small_test_grid <- expand.grid(beta = seq(0, 1.5, length.out = 20), gamma = seq(0, 0.5, length.out = 20))
+small_test_grid <- expand.grid(beta = seq(0, 1.5, length.out = 40), gamma = seq(0, 0.5, length.out = 40))
 ## Create design for next wave of emulation
-source("baseFunctions.R")
+cl <- makeCluster(8); setDefaultCluster(cl = cl)
+clusterEvalQ(cl, library(dplyr))
+clusterEvalQ(cl, library(hmer))
+clusterExport(cl, c("new_point_score", "mean_em_var", "r1", "R1", "part_inv"))
+plan(multisession, workers = 8)
 new_design <- design_subselect(training_points,
                           ems_wave1$no_boundary$expectation$I$o_em, this_var_em,
                           rep(10, 20), ranges, small_test_grid, rep_max = 400, pt_max = 40,
@@ -68,7 +72,7 @@ lines(x = seq_along(new_design$pt_scores[!is.infinite(new_design$pt_scores)]), y
 legend("topright", inset = 0.05, legend = c("New Point", "Extra Rep"),
        lty = 1, col = c("blue", "black"))
 
-bgn <- 20
+bgn <- 50
 big_grid <- expand.grid(
   beta = seq(ranges$beta[[1]], ranges$beta[[2]], length.out = bgn),
   gamma = seq(ranges$gamma[[1]], ranges$gamma[[2]], length.out = bgn)
@@ -87,8 +91,8 @@ exp_df <- cbind.data.frame(
   )
 )
 exp_df_reshape <- tidyr::pivot_longer(exp_df, cols = !c(beta, gamma))
-grid_plot(exp_df_reshape, "E", NULL, "Mean", wave0_output, 0.05)
-grid_plot(exp_df_reshape, "V", NULL, "Mean", wave0_output, 0.05, breaks = c(0, 5, 10, 50, 100, 500, 1000, 1500, 2500, 5000))# + theme(legend.position = "none")
+grid_plot(exp_df_reshape, "E", c("beta", "gamma"), "Mean", wave0_output)
+grid_plot(exp_df_reshape, "V", c("beta", "gamma"), "Mean", wave0_output, breaks = c(0, 5, 10, 50, 100, 500, 1000, 1500, 2500, 5000))
 var_df <- cbind.data.frame(
   big_grid,
   data.frame(
@@ -103,25 +107,79 @@ var_df <- cbind.data.frame(
   )
 )
 var_df_reshape <- tidyr::pivot_longer(var_df, cols = !c(1:2))
-grid_plot(var_df_reshape, "E", NULL, "Variance", wave0_output, 0.05, breaks = c(-50, 50, 100, 200, 300, 400, 500, 1000),
+grid_plot(var_df_reshape, "E", c("beta", "gamma"), "Variance", wave0_output, breaks = c(-50, 50, 100, 200, 300, 400, 500, 1000),
           labels = c("[0,50)", "[50,100)", "[100,200)", "[200,300)", "[300,400)", "[400,500)", "[500,1000)"))
-grid_plot(var_df_reshape, "V", NULL, "Variance", wave0_output, 0.05, 
+grid_plot(var_df_reshape, "V", c("beta", "gamma"), "Variance", wave0_output, 
           breaks = c(0, 1000, 5000, 10000, 20000, 30000, 40000, 50000, 100000),
           labels = c("[0, 1000)", "[1000, 5000)", "[5000, 10000)", "[10000, 20000)", "[20000, 30000)",
-                     "[30000, 40000)", "[40000, 50000)", "[50000, 100000)"))# + theme(legend.position = "none")
+                     "[30000, 40000)", "[40000, 50000)", "[50000, 100000)"))
+
+### Training new emulator and comparing to other proposal methods
+# Three methods of point proposal are considered: one using the improved design with
+# the corresponding suggested repetitions at each point (new_ems); one using a standard
+# Latin hypercube design with uniformly many repetitions at each point (basic_ems), and
+# one using the new design points but allocating equal numbers of repetitions to all
+# points (unif_rep_ems).
+old_vars <- ems_wave1$boundary_bulk$expectation$get_cov(big_grid)
+old_vars[old_vars < 0] <- 1e-6
+
+# Setup for the new design
+wave1_results <- do.call('rbind.data.frame', purrr::map(seq_len(nrow(new_design$points)), function(i) {
+  if (i <= 20 && new_design$points[i,3] == 10) return(NULL)
+  get_results(unlist(new_design$points[i, 1:2], use.names = FALSE), N, nreps = ifelse(i <= 20, new_design$points[i,3]-10, new_design$points[i,3]),
+              outs = c(out_name), times = 15)
+})) |> setNames(c(names(ranges), out_name))
+wave1_all <- rbind.data.frame(wave0_results, wave1_results)
+wave1_output <- data.frame(wave1_all |> dplyr::group_by(across(all_of(names(ranges)))) |>
+                             dplyr::summarise(exp = mean(.data[[out_name]]), var = var(.data[[out_name]]), reps = length(.data[[out_name]])))
+new_ems <- create_boundary_ems(wave1_all, out_name, ranges, new_design$points$reps,
+                               SIR_functions, bb_data, N, 0, c(1), out_index, t_point)
+
+# Setup for the basic design
+basic_lhs <- lhs::augmentLHS(
+  t(apply(training_points, 1, function(x) {
+    (x - purrr::map_dbl(ranges, ~.[[1]]))/purrr::map_dbl(ranges, diff)
+  })), 20
+)
+basic_scaled <- data.frame(t(apply(basic_lhs, 1, function(x) {
+  x * purrr::map_dbl(ranges, diff) + purrr::map_dbl(ranges, ~.[[1]])
+}))) |> setNames(names(ranges))
+basic_added <- do.call("rbind.data.frame", purrr::map(21:40, function(i) {
+  get_results(unlist(basic_scaled[i,], use.names = FALSE), N, nreps = 10, outs = c(out_name), times = 15)
+})) |> setNames(c(names(ranges), out_name))
+all_points_basic <- rbind.data.frame(wave0_results, basic_added)
+basic_ems <- create_boundary_ems(all_points_basic, out_name, ranges, rep(10, 40),
+                                 SIR_functions, bb_data, N, 0, c(1), out_index, t_point)
+
+# Setup for the new design with uniform reps
+unif_rep_res <- do.call("rbind.data.frame", purrr::map(seq_len(nrow(new_design$points)), function(i) {
+  get_results(unlist(new_design$points[i,1:2], use.names = FALSE), N, nreps = 10, outs = c(out_name), times = 15)
+})) |> setNames(c(names(ranges), out_name))
+unif_rep_ems <- create_boundary_ems(unif_rep_res, out_name, ranges, rep(10, 40),
+                                    SIR_functions, bb_data, N, 0, c(1), out_index, t_point)
 
 
-final_vars <- cbind.data.frame(small_test_grid, mean_em_var(small_test_grid, ems_wave1$no_boundary$expectation$I$o_em,
-                                                            this_var_em, new_design$points[,1:2], new_design$points$reps)) |>
-  setNames(c("beta", "gamma", "Var"))
-compare_vars <- cbind.data.frame(final_vars, exp_df$Vboth) |>
-  setNames(c("beta", "gamma", "after", "before"))
-compare_var_reshape <- tidyr::pivot_longer(compare_vars, cols = !c(beta, gamma))
-ggplot(data = compare_var_reshape, aes(x = beta, y = gamma, fill = value)) +
-  geom_raster(interpolate = TRUE) +
-  scale_fill_viridis(name = "Var", breaks = c(0, 100, 200, 300, 400, 500, 1000, 2000, 5000)) +
-  facet_grid(rows = vars(name))
+## Comparing predictive variance across the space
+new_vars <- new_ems$boundary_bulk$expectation$get_cov(big_grid)
+new_vars[new_vars < 0] <- 1e-6
+basic_vars <- basic_ems$boundary_bulk$expectation$get_cov(big_grid)
+basic_vars[basic_vars < 0] <- 1e-6
+unif_rep_vars <- unif_rep_ems$boundary_bulk$expectation$get_cov(big_grid)
+unif_rep_vars[unif_rep_vars < 0] <- 1e-6
 
+## Plotting the results: used here are the three emulator sets trained above with
+# the different proposals, as well as the original wave 1 stoch KBE emulators
+all_var_df <- cbind.data.frame(cbind.data.frame(big_grid, new_vars), cbind.data.frame(basic_vars, unif_rep_vars, old_vars)) |>
+  setNames(c('beta', 'gamma', 'New', 'Naive', "Uniform", "Old"))
+
+comparison_plot(all_var_df, c("Old", "Naive", "Uniform", "New"), c("beta", "gamma"), "Var",
+                breaks = c(0, 50, 100, 150, 200, 250, 300, 400, 500, 600, 1000, 5000, 10000))
+#### Paper Plots End Here ####
+
+
+############################################
+## Lasciate ogne speranza, voi ch'intrate ##
+############################################
 ## Optional - animating the point proposal process
 library(gganimate)
 library(gifski)
@@ -178,66 +236,3 @@ anim_alt <- ggplot(data = trans_df, aes(x = beta, y = gamma)) +
   theme(legend.position = "none") +
   ggtitle("Repetitions Placed: {frame_time}")
 animate(anim_alt, nframes = 200, end_pause = 25, height = 800, width = 800)
-anim_save("PropAnim2dAltAug.gif", animation = anim_alt)
-save.image(file = "May13.RData")
-
-
-### Training new emulator and comparing to other proposal methods
-# Three methods of point proposal are considered: one using the improved design with
-# the corresponding suggested repetitions at each point (new_ems); one using a standard
-# Latin hypercube design with uniformly many repetitions at each point (basic_ems), and
-# one using the new design points but allocating equal numbers of repetitions to all
-# points (unif_rep_ems).
-
-# Setup for the new design
-wave1_results <- do.call('rbind.data.frame', purrr::map(seq_len(nrow(new_design$points)), function(i) {
-  get_results(unlist(new_design$points[i,c('beta', 'gamma')], use.names = FALSE), nreps = new_design$points[i,"reps"], outs = c(out_name), times = 15)
-})) |> setNames(c(names(ranges), out_name))
-wave1_output <- data.frame(wave1_results |> dplyr::group_by(across(all_of(names(ranges)))) |>
-                             dplyr::summarise(exp = mean(.data[[out_name]]), var = var(.data[[out_name]])))
-new_ems <- create_boundary_ems(wave1_results, out_name, ranges, reps,
-                               b_exp, b_cov, bb_exp, bb_cov, bb_imp)
-
-# Setup for the basic design
-basic_points <- lhs::maximinLHS(20, 2)
-basic_scaled <- data.frame(t(apply(basic_points, 1, function(x) {
-  x * purrr::map_dbl(ranges, diff) + purrr::map_dbl(ranges, ~.[[1]])
-}))) |> setNames(names(ranges))
-all_basic <- rbind.data.frame(training_points, basic_scaled)
-basic_added <- do.call("rbind.data.frame", purrr::map(seq_len(nrow(basic_scaled)), function(i) {
-  get_results(unlist(basic_scaled[i,], use.names = FALSE), nreps = 10, outs = c(out_name), times = 15)
-})) |> setNames(c(names(ranges), out_name))
-all_points_basic <- rbind.data.frame(wave0_results, basic_added)
-basic_ems <- create_boundary_ems(all_points_basic, out_name, ranges, rep(10, 40),
-                                 b_exp, b_cov, bb_exp, bb_cov, bb_imp)
-
-# Setup for the new design with uniform reps
-unif_rep_res <- do.call("rbind.data.frame", purrr::map(seq_len(nrow(new_design$points)), function(i) {
-  get_results(unlist(new_design$points[i,c("beta", "gamma")], use.names = FALSE), nreps = 10, outs = c(out_name), times = 15)
-})) |> setNames(c(names(ranges), out_name))
-unif_rep_ems <- create_boundary_ems(unif_rep_res, out_name, ranges, rep(10, 40),
-                                    b_exp, b_cov, bb_exp, bb_cov, bb_imp)
-
-## Comparing predictive variance across the space
-new_vars <- new_ems$boundary_bulk$expectation$get_cov(small_test_grid)
-new_vars[new_vars < 0] <- 1e-6
-basic_vars <- basic_ems$boundary_bulk$expectation$get_cov(small_test_grid)
-basic_vars[basic_vars < 0] <- 1e-6
-unif_rep_vars <- unif_rep_ems$boundary_bulk$expectation$get_cov(small_test_grid)
-# Mean predictive variance
-mean(new_vars)
-mean(basic_vars)
-mean(unif_rep_vars)
-mean(basic_vars)/mean(new_vars)
-
-## Plotting the results: used here are the three emulator sets trained above with
-# the different proposals, as well as the original wave 1 stoch KBE emulators
-all_var_df <- cbind.data.frame(cbind.data.frame(small_test_grid, new_vars), cbind.data.frame(basic_vars, unif_rep_vars, exp_df$Vboth)) |>
-  setNames(c('beta', 'gamma', 'New', 'Old', "Uniform", "Naive"))
-reshape_var_df <- tidyr::pivot_longer(all_var_df, cols = !c(beta, gamma))
-reshape_var_df$name <- factor(reshape_var_df$name, levels = c("Old", "Naive", "Uniform", "New"))
-
-ggplot(data = reshape_var_df, aes(x = beta, y = gamma, z = value)) +
-  geom_contour_filled(breaks = c(0, 50, 100, 150, 200, 250, 300, 400, 500, 600, 1000, 5000)) +
-  scale_fill_viridis(discrete = TRUE, name = "Variance") +
-  facet_wrap(vars(name), nrow = 2)

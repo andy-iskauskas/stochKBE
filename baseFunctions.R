@@ -9,8 +9,10 @@ library(purrr)
 library(dplyr)
 library(hmer)
 library(MASS)
-library(optimParallel)
-library(future)
+
+## Optional: future and optimParallel for parallelisation of proposal
+has_par_optim <- suppressWarnings(require(optimParallel))
+has_future <- suppressWarnings(require(future))
 ## Gillespie algorithm for obtaining model realisations
 # N is a list containing initial compartment numbers,
 # pre- and post-transition matrices, and hazard function
@@ -79,7 +81,7 @@ get_results <- function(params, obj, nreps = 100, outs, times, raw = FALSE) {
   collected <- list()
   for (i in 1:nreps) {
     relev <- c(arra[times+1, which(names(obj$M) %in% outs), i])
-    names <- unlist(purrr::map(outs, ~paste0(., times, sep = "")))
+    names <- unlist(map(outs, ~paste0(., times, sep = "")))
     relev <- setNames(relev, names)
     collected[[i]] <- relev
   }
@@ -96,8 +98,21 @@ get_results <- function(params, obj, nreps = 100, outs, times, raw = FALSE) {
 create_boundary_ems <- function(data_raw, out_name, ranges, reps,
                                 analytics, bb_data, model,
                                 vals = c(0), indices = c(1), out_index, t) {
-  data <- data.frame(data_raw |> dplyr::group_by(across(all_of(names(ranges)))) |>
-                       dplyr::summarise(exp = mean(.data[[out_name]]), var = var(.data[[out_name]])))
+  get_summary <- function(data, input_names, out_name) {
+    data_uids <- apply(data[,input_names], 1, rlang::hash)
+    unique_uids <- unique(data_uids)
+    out_arr <- array(0, dim = c(length(unique_uids), length(input_names)+2))
+    for (i in seq_along(unique_uids)) {
+      which_dat <- data[data_uids == unique_uids[i],]
+      which_mean <- mean(which_dat[,out_name])
+      which_var <- var(which_dat[,out_name])
+      out_arr[i,] <- unlist(c(which_dat[1,input_names], which_mean, which_var), use.names = FALSE)
+    }
+    return(data.frame(out_arr) |> setNames(c(input_names, "exp", "var")))
+  }
+  # data <- data.frame(data_raw |> dplyr::group_by(across(all_of(names(ranges)))) |>
+  #                      dplyr::summarise(exp = mean(.data[[out_name]]), var = var(.data[[out_name]])))
+  data <- get_summary(data_raw, names(ranges), out_name)
   if (length(reps) == 1) reps <- rep(reps, nrow(data))
   no_bound_ems <- hmer::emulator_from_data(data_raw, out_name, ranges,
                                            emulator_type = "variance", 
@@ -114,7 +129,7 @@ create_boundary_ems <- function(data_raw, out_name, ranges, reps,
     vals = vals, indices = indices
   )
   gillesp_var <- analytics$b_cov(data[,names(ranges)], em = prior_var_em, full = TRUE, vals = vals, indices = indices) +
-    purrr::map_dbl(seq_len(nrow(data)), ~prior_var_em$s_diag(data[.,], reps[.]))
+    map_dbl(seq_len(nrow(data)), ~prior_var_em$s_diag(data[.,], reps[.]))
   gillesp_var_inv <- tryCatch(chol2inv(chol(gillesp_var)), error = function(e) MASS::ginv(gillesp_var))
   gillesp_exp_diff <- data$var - analytics$b_exp(data[,names(ranges)], prior_var_em, function(y) analytics$analytic_sd(y, t, out_index, init_vals = model$M),
                                                  vals = vals, indices = indices)
@@ -133,7 +148,7 @@ create_boundary_ems <- function(data_raw, out_name, ranges, reps,
   )
   
   gillesp_e_var <- analytics$b_cov(data[,names(ranges)], em = prior_exp_em, full = TRUE, vals = vals, indices = indices) +
-    purrr::map_dbl(seq_len(nrow(data)), ~boundary_em$get_exp(data[.,])/reps[.])
+    map_dbl(seq_len(nrow(data)), ~boundary_em$get_exp(data[.,])/reps[.])
   gillesp_e_var_inv <- tryCatch(chol2inv(chol(gillesp_e_var)), error = function(e) MASS::ginv(gillesp_e_var))
   gillesp_e_exp_diff <- data$exp - analytics$b_exp(data[,names(ranges)], prior_exp_em, function(y) analytics$analytic_mean(y, t, out_index, init_vals = model$M),
                                                    vals = vals, indices = indices)
@@ -272,10 +287,16 @@ design_subselect <- function(data, pre_em, var_em, reps, ranges, testgrid,
       new_point_score(x_mod, data, pre_em, var_em, reps, testgrid, start, ntoadd,
                       boundary_col, boundary_val)
     }
-    optimised <- optimParallel(purrr::map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
-                       lower = purrr::map_dbl(ranges, ~.[[1]]+0.01*diff(.)),
-                       upper = purrr::map_dbl(ranges, ~.[[2]]-0.01*diff(.)),
-                       control = list(trace = FALSE))
+    if (has_par_optim)
+      optimised <- optimParallel(map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
+                         lower = map_dbl(ranges, ~.[[1]]+0.01*diff(.)),
+                         upper = map_dbl(ranges, ~.[[2]]-0.01*diff(.)),
+                         control = list(trace = FALSE))
+    else
+      optimised <- optim(map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
+                         lower = map_dbl(ranges, ~.[[1]]+0.01*diff(.)),
+                         upper = map_dbl(ranges, ~.[[2]]-0.01*diff(.)),
+                         method = "L-BFGS-B", control = list(trace = FALSE))
     this_val <- optimised$value
     this_pt <- data.frame(matrix(optimised$par, nrow = 1)) |> setNames(names(ranges))
     dists <- apply(data, 1, function(x) {
@@ -295,20 +316,25 @@ design_subselect <- function(data, pre_em, var_em, reps, ranges, testgrid,
       chol2inv(chol(start_inv)),
       error = function(e) MASS::ginv(start_inv)
     )
-    rep_vals <- furrr::future_map_dbl(seq_len(nrow(data)), function(i) {
-      new_rep_score(i, data, pre_em, var_em, reps, testgrid, start, ntoadd, boundary_col, boundary_val)
-    })
+    if (has_future)
+      rep_vals <- furrr::future_map_dbl(seq_len(nrow(data)), function(i) {
+        new_rep_score(i, data, pre_em, var_em, reps, testgrid, start, ntoadd, boundary_col, boundary_val)
+      })
+    else
+      rep_vals <- map_dbl(seq_len(nrow(data)), function(i) {
+        new_rep_score(i, data, pre_em, var_em, reps, testgrid, start, ntoadd, boundary_col, boundary_val)
+      })
     return(list(val = min(rep_vals), index = which.min(rep_vals)))
   }
   failsafe <- 0
-  while(sum(reps) < rep_max && failsafe < 1000) {
+  while(sum(reps) < rep_max && failsafe < 10000) {
     rep_suggest <- find_next_rep(data, pre_em, var_em, reps, ntoadd, boundary_col, boundary_val)
     if (nrow(data) < pt_max)
       pt_suggest <- find_next_point(data, pre_em, var_em, reps, ranges, ntoadd, boundary_col, boundary_val)
     else
       pt_suggest <- NULL
     if (verbose) {
-      print_str <- paste0("Proposal ", failsafe, ":")
+      print_str <- paste0("Proposal ", failsafe+1, ":")
       if (!is.null(pt_suggest)) {
         print_str <- paste0(print_str, " Point score ", signif(pt_suggest$val, 4), ";")
       }
