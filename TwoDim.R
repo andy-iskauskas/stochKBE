@@ -54,10 +54,12 @@ this_var_em <- ems_wave1$boundary_bulk$variance
 ## Create a 20x20 grid of points to evaluate mean emulator variance on
 small_test_grid <- expand.grid(beta = seq(0, 1.5, length.out = 40), gamma = seq(0, 0.5, length.out = 40))
 ## Create design for next wave of emulation
+## Next 4 lines relevant if optimParallel is installed
 cl <- makeCluster(8); setDefaultCluster(cl = cl)
 clusterEvalQ(cl, library(dplyr))
 clusterEvalQ(cl, library(hmer))
 clusterExport(cl, c("new_point_score", "mean_em_var", "r1", "R1", "part_inv"))
+## Next line relevant if future is installed
 plan(multisession, workers = 8)
 new_design <- design_subselect(training_points,
                           ems_wave1$no_boundary$expectation$I$o_em, this_var_em,
