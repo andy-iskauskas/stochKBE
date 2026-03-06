@@ -93,8 +93,22 @@ exp_df <- cbind.data.frame(
   )
 )
 exp_df_reshape <- tidyr::pivot_longer(exp_df, cols = !c(beta, gamma))
-grid_plot(exp_df_reshape, "E", c("beta", "gamma"), "Mean", wave0_output)
-grid_plot(exp_df_reshape, "V", c("beta", "gamma"), "Mean", wave0_output, breaks = c(0, 5, 10, 50, 100, 500, 1000, 1500, 2500, 5000))
+grid_plot(exp_df_reshape, "E", c("beta", "gamma"), "Mean", wave0_output, viridoption = "D",
+          breaks = c(-500, 0, 100, 200, 300, 500, 750, 1000, 1500),
+          labels = c("(-500, 0]", "[0, 100)", "[100, 200)", "[200, 300)",
+                     "[300, 500)", "[500, 750)", "[750, 1000)", "[1000, 1500)")) +
+  theme_minimal() +
+  scale_x_continuous(expand = c(0,0)) +
+  scale_y_continuous(expand = c(0,0))
+grid_plot(exp_df_reshape, "V", c("beta", "gamma"), "Mean", wave0_output, viridoption = "C",
+          breaks = c(-1e-7, 10, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000),
+          labels = c("[0, 10)", "[10, 50)", "[50, 100)", "[100, 200)",
+                     "[200, 500)", "[500, 1000)", "[1000, 2000)", "[2000, 5000)",
+                     "[5000, 10000)", "[10000, 20000)")) +
+  theme_minimal() +
+  scale_x_continuous(expand = c(0,0)) +
+  scale_y_continuous(expand = c(0,0))
+
 var_df <- cbind.data.frame(
   big_grid,
   data.frame(
@@ -109,12 +123,35 @@ var_df <- cbind.data.frame(
   )
 )
 var_df_reshape <- tidyr::pivot_longer(var_df, cols = !c(1:2))
-grid_plot(var_df_reshape, "E", c("beta", "gamma"), "Variance", wave0_output, breaks = c(-50, 50, 100, 200, 300, 400, 500, 1000),
-          labels = c("[0,50)", "[50,100)", "[100,200)", "[200,300)", "[300,400)", "[400,500)", "[500,1000)"))
+grid_plot(var_df_reshape, "E", c("beta", "gamma"), "Variance", wave0_output, breaks = c(-400, 10, 50, 100, 200, 300, 400, 500, 1000),
+          labels = c("[0,10)", "[10, 50)", "[50,100)", "[100,200)", "[200,300)", "[300,400)", "[400,500)", "[500,1000)"),
+          viridoption = "D") +
+  theme_minimal() +
+  scale_x_continuous(expand = c(0,0)) +
+  scale_y_continuous(expand = c(0,0))
 grid_plot(var_df_reshape, "V", c("beta", "gamma"), "Variance", wave0_output, 
           breaks = c(0, 1000, 5000, 10000, 20000, 30000, 40000, 50000, 100000),
           labels = c("[0, 1000)", "[1000, 5000)", "[5000, 10000)", "[10000, 20000)", "[20000, 30000)",
-                     "[30000, 40000)", "[40000, 50000)", "[50000, 100000)"))
+                     "[30000, 40000)", "[40000, 50000)", "[50000, 100000)"),
+          viridoption = "C") +
+  theme_minimal() +
+  scale_x_continuous(expand = c(0,0)) +
+  scale_y_continuous(expand = c(0,0))
+
+## Plotting the result of the proposal
+ggplot(data = subset(exp_df_reshape, name == "Vboth"), aes(x = beta, y = gamma)) +
+  geom_contour_filled(aes(z = value), breaks = c(-1e-7, 10, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000)) +
+  scale_fill_viridis(discrete = TRUE, name = "Var", option = "C",
+                     labels = c("[0, 10)", "[10, 50)", "[50, 100)", "[100, 200)",
+                                "[200, 500)", "[500, 1000)", "[1000, 2000)", "[2000, 5000)",
+                                "[5000, 10000)", "[10000, 20000)")) +
+  geom_point(data = new_design$points, col = rep(c("grey", "black"), each = 20)) +
+  geom_text(data = new_design$points, aes(y = gamma + 0.012, label = reps),
+            col = rep(c("grey", "black"), each = 20)) +
+  theme_minimal() +
+  scale_x_continuous(expand = c(0,0.01)) +
+  scale_y_continuous(expand = c(0.01,0))
+  
 
 ### Training new emulator and comparing to other proposal methods
 # Three methods of point proposal are considered: one using the improved design with
@@ -175,7 +212,7 @@ all_var_df <- cbind.data.frame(cbind.data.frame(big_grid, new_vars), cbind.data.
   setNames(c('beta', 'gamma', 'New', 'Naive', "Uniform", "Old"))
 
 comparison_plot(all_var_df, c("Old", "Naive", "Uniform", "New"), c("beta", "gamma"), "Var",
-                breaks = c(0, 50, 100, 150, 200, 250, 300, 400, 500, 600, 1000, 5000, 10000))
+                breaks = c(0, 0.5, 1, 5, 10, 50, 100, 200, 300, 500, 10000))
 #### Paper Plots End Here ####
 
 

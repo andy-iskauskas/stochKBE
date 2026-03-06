@@ -115,12 +115,21 @@ create_boundary_ems <- function(data_raw, out_name, ranges, reps,
   data <- get_summary(data_raw, names(ranges), out_name)
   if (length(reps) == 1) reps <- rep(reps, nrow(data))
   no_bound_ems <- hmer::emulator_from_data(data_raw, out_name, ranges,
-                                           emulator_type = "variance", 
+                                           emulator_type = "variance",
+                                           order = 1
                                            # specified_priors = list(
                                            #   expectation = list(delta = c(0.01)),
                                            #   variance = list(delta = c(0.01))
                                            # )
                                            )
+  ## Slightly inflate theta
+  theta_factor <- 1.5
+  no_bound_ems$variance[[out_name]] <- no_bound_ems$variance[[out_name]]$set_hyperparams(
+    list(theta = theta_factor*no_bound_ems$variance[[out_name]]$corr$hyper_p$theta), nugget = 0
+  )  
+  no_bound_ems$expectation[[out_name]] <- no_bound_ems$expectation[[out_name]]$set_hyperparams(
+    list(theta = theta_factor*no_bound_ems$expectation[[out_name]]$corr$hyper_p$theta), nugget = 0
+  )
   prior_var_em <- no_bound_ems$variance[[out_name]]$o_em
   prior_exp_em <- no_bound_ems$expectation[[out_name]]$o_em
   boundary_em <- hmer::Proto_emulator$new(
