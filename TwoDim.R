@@ -212,7 +212,8 @@ all_var_df <- cbind.data.frame(cbind.data.frame(big_grid, new_vars), cbind.data.
   setNames(c('beta', 'gamma', 'New', 'Naive', "Uniform", "Old"))
 
 comparison_plot(all_var_df, c("Old", "Naive", "Uniform", "New"), c("beta", "gamma"), "Var",
-                breaks = c(0, 0.5, 1, 5, 10, 50, 100, 200, 300, 500, 10000))
+                breaks = c(0, 0.5, 1, 5, 10, 50, 100, 200, 300, 500, 10000),
+                viridoption = "C")
 #### Paper Plots End Here ####
 
 

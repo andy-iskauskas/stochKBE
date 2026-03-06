@@ -73,18 +73,22 @@ grid_plot <- function(data, prefix, plot_names = c("beta", "gamma"), title_add =
 }
 
 comparison_plot <- function(data, facet_names, plot_names = c("beta", "gamma"), 
-                            levels_name = "level", breaks = NULL, labels = NULL) {
+                            levels_name = "level", breaks = NULL, labels = NULL,
+                            viridoption = "D") {
   data_reshape <- tidyr::pivot_longer(data, cols = all_of(facet_names))
   data_reshape$name <- factor(data_reshape$name, levels = facet_names)
   g <- ggplot(data = data_reshape, aes(x = .data[[plot_names[1]]], y = .data[[plot_names[2]]], z = value))
   if (!is.null(breaks)) {
     g <- g + geom_contour_filled(breaks = breaks)
     if (!is.null(labels))
-      g <- g + scale_fill_viridis(discrete = TRUE, labels = labels, name = levels_name)
+      g <- g + scale_fill_viridis(discrete = TRUE, labels = labels, name = levels_name,
+                                  option = viridoption)
     else
-      g <- g + scale_fill_viridis(discrete = TRUE, name = levels_name)
+      g <- g + scale_fill_viridis(discrete = TRUE, name = levels_name,
+                                  option = viridoption)
   }
   else
-    g <- g + geom_contour_filled() + scale_fill_viridis(discrete = TRUE, name = levels_name)
+    g <- g + geom_contour_filled() + scale_fill_viridis(discrete = TRUE, name = levels_name,
+                                                        option = viridoption)
   return(g + guides(fill = guide_legend(ncol = 1)) + facet_wrap(vars(name), nrow = 2))
 }
