@@ -57,23 +57,23 @@ N_SEIR <- list(
   }
 )
 
-## Generating bulk results: 20 points, 10 reps each
+## Generating bulk results: 120 points, 10 reps each
 reps = 10
 ## Focusing on number of infected at time t=15
 out_name = "I"
 out_index = 3
 t_point = 15
-## Ranges for the three parameters
+## Ranges for the parameters
 ranges <- list(
   lambda = c(1e-5, 1e-4),
   mu = c(1e-5, 1e-4),
   beta = c(0, 0.5),
-  eps = c(0, 0.21),
+  epsilon = c(0, 0.21),
   alpha = c(0.01, 0.025),
   gamma = c(0.05, 0.08),
   omega = c(0.002, 0.004)
 )
-set.seed(1)
+
 training_points <- data.frame(t(apply(
   lhs::randomLHS(20*length(ranges), length(ranges)),
   1, function(x) {
@@ -93,11 +93,11 @@ ems_wave1 <- create_boundary_ems(wave0_results, out_name, ranges, reps,
 ## Create a (comparatively) large grid to evaluate on
 big_grid <- expand.grid(
   beta = seq(ranges$beta[1], ranges$beta[2], length.out = 40),
-  eps = seq(ranges$eps[1], ranges$eps[2], length.out = 40)
+  epsilon = seq(ranges$epsilon[1], ranges$epsilon[2], length.out = 40)
 )
 for (nm in names(ranges)) {
-  if (nm != "beta" && nm != "eps")
-    big_grid[,nm] <- 0.6*sum(ranges[[nm]])
+  if (nm != "beta" && nm != "epsilon")
+    big_grid[,nm] <- 0.8*sum(ranges[[nm]])
 }
 big_grid <- big_grid[,names(ranges)]
 
@@ -120,8 +120,13 @@ exp_df$Vbound[exp_df$Vbound < 0] <- 1e-6
 exp_df$Vboth[exp_df$Vboth < 0] <- 1e-6
 exp_df$Vno[exp_df$Vno < 0] <- 1e-6
 exp_df_reshape <- tidyr::pivot_longer(exp_df, cols = !c(1:7))
-grid_plot(exp_df_reshape, "E", c("beta", "eps"))
-grid_plot(exp_df_reshape, "V", c("beta", "eps"))
+grid_plot(exp_df_reshape, "E", c("beta", "epsilon"),
+          breaks = c(-100, 0, 10, 20, 50, 100, 150, 200, 300), viridoption = "D")
+grid_plot(exp_df_reshape, "V", c("beta", "epsilon"),
+          breaks = c(-1, 0, 0.1, 0.5, 1, 2, 5, 10, 50, 100, 250, 1000, 2000), viridoption = "C") +
+  theme_minimal() +
+  scale_x_continuous(expand = c(0,0)) +
+  scale_y_continuous(expand = c(0,0))
 
 var_df <- cbind.data.frame(
   big_grid,
@@ -137,8 +142,8 @@ var_df <- cbind.data.frame(
   )
 )
 var_df_reshape <- tidyr::pivot_longer(var_df, cols = !c(1:7))
-grid_plot(var_df_reshape, "E", c("beta", "eps"))
-grid_plot(var_df_reshape, "V", c("beta", "eps"))
+grid_plot(var_df_reshape, "E", c("beta", "epsilon"))
+grid_plot(var_df_reshape, "V", c("beta", "epsilon"))
 
 ## Create a collection of points on which to evaluate emulator variance
 test_lhs <- lhs::randomLHS(1000, length(ranges))

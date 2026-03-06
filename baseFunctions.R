@@ -116,7 +116,7 @@ create_boundary_ems <- function(data_raw, out_name, ranges, reps,
   if (length(reps) == 1) reps <- rep(reps, nrow(data))
   no_bound_ems <- hmer::emulator_from_data(data_raw, out_name, ranges,
                                            emulator_type = "variance",
-                                           order = 1
+                                           order = 1, beta.var = FALSE
                                            # specified_priors = list(
                                            #   expectation = list(delta = c(0.01)),
                                            #   variance = list(delta = c(0.01))

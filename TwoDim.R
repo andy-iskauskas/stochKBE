@@ -39,6 +39,46 @@ training_points <- data.frame(t(apply(
     x * purrr::map_dbl(ranges, diff) + purrr::map_dbl(ranges, ~.[[1]])
   }
 ))) |> setNames(names(ranges))
+## Sample Plot
+test_runs <- map(seq_len(nrow(training_points)), function(i) {
+  get_results(as.numeric(training_points[i,]), N, 10, outs = c(out_name), times = 30, raw = TRUE)
+})
+
+run_sample <- sample(length(test_runs), 8)
+## Infected
+plot(1:10, 1:10, xlim = c(0, 30), ylim = c(0, 1000), type = 'n',
+     main = "SIRS Model: Infected",
+     xlab = "Time", ylab = "Number of Infected")
+for (i in seq_along(run_sample)) {
+  these_runs <- test_runs[[run_sample[i]]]
+  for (j in seq_len(dim(these_runs)[3])) {
+    lines(x = 0:30, y = these_runs[,,j][,2], col = i)
+  }
+}
+abline(v = 15, lty = 2, col = "black")
+## Recovered
+plot(1:10, 1:10, xlim = c(0, 30), ylim = c(0, 1000), type = 'n',
+     main = "SIRS Model: Recovered",
+     xlab = "Time", ylab = "Number of Recovered")
+for (i in seq_along(run_sample)) {
+  these_runs <- test_runs[[run_sample[i]]]
+  for (j in seq_len(dim(these_runs)[3])) {
+    lines(x = 0:30, y = these_runs[,,j][,3], col = i)
+  }
+}
+abline(v = 15, lty = 2, col = "black")
+## Susceptible
+plot(1:10, 1:10, xlim = c(0, 30), ylim = c(0, 1000), type = 'n',
+     main = "SIRS Model: Susceptible",
+     xlab = "Time", ylab = "Number of Susceptible")
+for (i in seq_along(run_sample)) {
+  these_runs <- test_runs[[run_sample[i]]]
+  for (j in seq_len(dim(these_runs)[3])) {
+    lines(x = 0:30, y = these_runs[,,j][,1], col = i)
+  }
+}
+abline(v = 15, lty = 2, col = "black")
+
 wave0_results <- do.call('rbind.data.frame', purrr::map(seq_len(nrow(training_points)), function(i) {
   get_results(unlist(training_points[i,], use.names = FALSE), N, nreps = reps, outs = c(out_name), times = 15)
 })) |> setNames(c(names(ranges), out_name))
@@ -94,9 +134,9 @@ exp_df <- cbind.data.frame(
 )
 exp_df_reshape <- tidyr::pivot_longer(exp_df, cols = !c(beta, gamma))
 grid_plot(exp_df_reshape, "E", c("beta", "gamma"), "Mean", wave0_output, viridoption = "D",
-          breaks = c(-500, 0, 100, 200, 300, 500, 750, 1000, 1500),
-          labels = c("(-500, 0]", "[0, 100)", "[100, 200)", "[200, 300)",
-                     "[300, 500)", "[500, 750)", "[750, 1000)", "[1000, 1500)")) +
+          breaks = c(-250, 0, 100, 200, 300, 500, 750, 1000, 1200),
+          labels = c("(-250, 0]", "[0, 100)", "[100, 200)", "[200, 300)",
+                     "[300, 500)", "[500, 750)", "[750, 1000)", "[1000, 1200)")) +
   theme_minimal() +
   scale_x_continuous(expand = c(0,0)) +
   scale_y_continuous(expand = c(0,0))
@@ -139,18 +179,22 @@ grid_plot(var_df_reshape, "V", c("beta", "gamma"), "Variance", wave0_output,
   scale_y_continuous(expand = c(0,0))
 
 ## Plotting the result of the proposal
+get_loc <- function(y) {
+  if (y > 0.48) return(y-0.012)
+  else return(y+0.012)
+}
 ggplot(data = subset(exp_df_reshape, name == "Vboth"), aes(x = beta, y = gamma)) +
-  geom_contour_filled(aes(z = value), breaks = c(-1e-7, 10, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000)) +
-  scale_fill_viridis(discrete = TRUE, name = "Var", option = "C",
-                     labels = c("[0, 10)", "[10, 50)", "[50, 100)", "[100, 200)",
-                                "[200, 500)", "[500, 1000)", "[1000, 2000)", "[2000, 5000)",
-                                "[5000, 10000)", "[10000, 20000)")) +
-  geom_point(data = new_design$points, col = rep(c("grey", "black"), each = 20)) +
-  geom_text(data = new_design$points, aes(y = gamma + 0.012, label = reps),
-            col = rep(c("grey", "black"), each = 20)) +
+  geom_raster(aes(fill = value), interpolate = TRUE) +
+  scale_fill_gradientn(name = "Var", colours = viridis::viridis(10, option = "C"),
+                       values = c(0, 0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.075, 0.1, 0.2, 0.5, 0.75, 1)) +
+  geom_point(data = new_design$points, col = rep(c("grey", "white"), each = 20), size = rep(c(0.8, 1), each = 20)) +
+  geom_text(data = new_design$points, aes(label = reps),
+            y = sapply(new_design$points$gamma, get_loc),
+            col = rep(c("grey", "white"), each = 20), size = rep(c(3, 4), each = 20)) +
   theme_minimal() +
   scale_x_continuous(expand = c(0,0.01)) +
-  scale_y_continuous(expand = c(0.01,0))
+  scale_y_continuous(expand = c(0.01,0)) +
+  labs(x = TeX("$\\beta$"), y = TeX("$\\gamma$"))
   
 
 ### Training new emulator and comparing to other proposal methods
@@ -211,8 +255,10 @@ unif_rep_vars[unif_rep_vars < 0] <- 1e-6
 all_var_df <- cbind.data.frame(cbind.data.frame(big_grid, new_vars), cbind.data.frame(basic_vars, unif_rep_vars, old_vars)) |>
   setNames(c('beta', 'gamma', 'New', 'Naive', "Uniform", "Old"))
 
-comparison_plot(all_var_df, c("Old", "Naive", "Uniform", "New"), c("beta", "gamma"), "Var",
-                breaks = c(0, 0.5, 1, 5, 10, 50, 100, 200, 300, 500, 10000),
+comparison_plot(all_var_df, c("Old", "Naive", "Uniform", "New"), c("beta", "gamma"), "Variance",
+                breaks = c(0, 0.1, 0.25, 0.5, 1, 5, 10, 100, 200, 500, 1000, 10000),
+                labels = c("(0, 0.1]", "(0.1, 0.25]", "(0.25, 0.5]", "(0.5, 1]", "(1, 5]", "(5, 10]",
+                           "(10, 100]", "(100, 200]", "(200, 500]", "(500, 1000]", "(1000, 10000]"),
                 viridoption = "C")
 #### Paper Plots End Here ####
 
