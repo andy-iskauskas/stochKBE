@@ -6,11 +6,11 @@ source("modelFunctions.R")
 source("plotting.R")
 library(lhs)
 library(tidyr)
-set.seed(42)
+set.seed(123)
 
 ## SEIR Model specification
 N_SEIR <- list(
-  M = c(S = 940, E = 10, I = 50, R = 0),
+  M = c(S = 900, E = 10, I = 90, R = 0),
   Pre = matrix(
     c(
       0,0,0,0, # 0 -> S
@@ -67,19 +67,72 @@ t_point = 15
 ranges <- list(
   lambda = c(1e-5, 1e-4),
   mu = c(1e-5, 1e-4),
-  beta = c(0, 0.5),
+  beta = c(0, 1.5),
   epsilon = c(0, 0.21),
   alpha = c(0.01, 0.025),
   gamma = c(0.05, 0.08),
   omega = c(0.002, 0.004)
 )
+npts <- 200
 
 training_points <- data.frame(t(apply(
-  lhs::randomLHS(20*length(ranges), length(ranges)),
+  lhs::randomLHS(npts, length(ranges)),
   1, function(x) {
     x * purrr::map_dbl(ranges, diff) + purrr::map_dbl(ranges, ~.[[1]])
   }
 ))) |> setNames(names(ranges))
+
+## Sample Plot
+test_runs <- map(seq_len(nrow(training_points)), function(i) {
+  get_results(as.numeric(training_points[i,]), N_SEIR, 10, outs = c(out_name), times = 30, raw = TRUE)
+})
+
+run_sample <- sample(length(test_runs), 10)
+## Susceptible
+plot(1:10, 1:10, xlim = c(0, 30), ylim = c(0, 900), type = 'n',
+     main = "SEIRS Model: Susceptible",
+     xlab = "Time", ylab = "Number of Susceptible")
+for (i in seq_along(run_sample)) {
+  these_runs <- test_runs[[run_sample[i]]]
+  for (j in seq_len(dim(these_runs)[3])) {
+    lines(x = 0:30, y = these_runs[,,j][,1], col = i)
+  }
+}
+abline(v = 15, lty = 2, col = "black")
+## Exposed
+plot(1:10, 1:10, xlim = c(0, 30), ylim = c(0, 1000), type = 'n',
+     main = "SEIRS Model: Exposed",
+     xlab = "Time", ylab = "Number of Exposed")
+for (i in seq_along(run_sample)) {
+  these_runs <- test_runs[[run_sample[i]]]
+  for (j in seq_len(dim(these_runs)[3])) {
+    lines(x = 0:30, y = these_runs[,,j][,2], col = i)
+  }
+}
+abline(v = 15, lty = 2, col = "black")
+## Infected
+plot(1:10, 1:10, xlim = c(0, 30), ylim = c(0, 600), type = 'n',
+     main = "SEIRS Model: Infected",
+     xlab = "Time", ylab = "Number of Infected")
+for (i in seq_along(run_sample)) {
+  these_runs <- test_runs[[run_sample[i]]]
+  for (j in seq_len(dim(these_runs)[3])) {
+    lines(x = 0:30, y = these_runs[,,j][,3], col = i)
+  }
+}
+abline(v = 15, lty = 2, col = "black")
+## Recovered
+plot(1:10, 1:10, xlim = c(0, 30), ylim = c(0, 1000), type = 'n',
+     main = "SEIRS Model: Recovered",
+     xlab = "Time", ylab = "Number of Recovered")
+for (i in seq_along(run_sample)) {
+  these_runs <- test_runs[[run_sample[i]]]
+  for (j in seq_len(dim(these_runs)[3])) {
+    lines(x = 0:30, y = these_runs[,,j][,4], col = i)
+  }
+}
+abline(v = 15, lty = 2, col = "black")
+
 wave0_results <- do.call('rbind.data.frame', purrr::map(seq_len(nrow(training_points)), function(i) {
   get_results(unlist(training_points[i,], use.names = FALSE), N_SEIR, nreps = reps, outs = c(out_name), times = 15)
 })) |> setNames(c(names(ranges), out_name))
@@ -97,7 +150,7 @@ big_grid <- expand.grid(
 )
 for (nm in names(ranges)) {
   if (nm != "beta" && nm != "epsilon")
-    big_grid[,nm] <- 0.5*sum(ranges[[nm]])
+    big_grid[,nm] <- training_points[1, nm]
 }
 big_grid <- big_grid[,names(ranges)]
 
@@ -121,19 +174,19 @@ exp_df$Vboth[exp_df$Vboth < 0] <- 1e-6
 exp_df$Vno[exp_df$Vno < 0] <- 1e-6
 exp_df_reshape <- tidyr::pivot_longer(exp_df, cols = !c(1:7))
 grid_plot(exp_df_reshape, "E", c("beta", "epsilon"), viridoption = "D",
-          breaks = c(-50, 0, 10, 25, 50, 100, 200, 300, 400)) +
+          breaks = c(-1500, 0, 10, 25, 50, 100, 250, 500, 1000)) +
   theme_minimal() +
   scale_x_continuous(expand = c(0.01,0.01)) +
   scale_y_continuous(expand = c(0.01,0.01))
 grid_plot(exp_df_reshape, "V", c("beta", "epsilon"),
-          breaks = c(0, 0.25, 0.5, 1,
+          breaks = c(0, 0.5, 1,
                      10, 100, 1000,
-                     1e4, 1e6, 1e8),
-          labels = c(TeX(r"(\[0, 0.25))"), TeX(r"(\[0.25, 0.5))"),
+                     1e4, 1e6, 1e8, 1e10),
+          labels = c(TeX(r"(\[0, 0.25))"), #TeX(r"(\[0.25, 0.5))"),
                      TeX(r"(\[0.5, 1))"), TeX(r"(\[1, 10))"),
                      TeX(r"(\[10, 10^2))"),TeX(r"(\[10^2, 10^3))"),
                      TeX(r"(\[10^3, 10^4))"),TeX(r"(\[10^4, 10^6))"),
-                     TeX(r"(\[10^6, 10^8))")),
+                     TeX(r"(\[10^6, 10^8))"), TeX(r"(\[10^8, 10^10))")),
           viridoption = "C") +
   theme_minimal() +
   scale_x_continuous(expand = c(0.01,0.01)) +
@@ -157,7 +210,7 @@ grid_plot(var_df_reshape, "E", c("beta", "epsilon"))
 grid_plot(var_df_reshape, "V", c("beta", "epsilon"))
 
 ## Create a collection of points on which to evaluate emulator variance
-test_lhs <- lhs::randomLHS(5000, length(ranges))
+test_lhs <- lhs::randomLHS(2500, length(ranges))
 small_test_grid <- data.frame(t(apply(test_lhs, 1, function(x) {
   x * purrr:::map_dbl(ranges, diff) + purrr::map_dbl(ranges, ~.[[1]])
 }))) |> setNames(names(ranges))
@@ -181,8 +234,8 @@ plan(multisession, workers = 8)
 new_design <- design_subselect(training_points,
                                ems_wave1$no_boundary$expectation$I$o_em, this_var_em,
                                rep(10, nrow(training_points)), ranges, small_test_grid,
-                               rep_max = 20*nrow(training_points), pt_max = 2*nrow(training_points),
-                               store_order = TRUE, verbose = TRUE, return_scores = TRUE, ntoadd = 2,
+                               rep_max = 3000, pt_max = 300,
+                               store_order = TRUE, verbose = TRUE, return_scores = TRUE, ntoadd = 5,
                                boundary_col = c(3,4), boundary_val = 0
                                )
 #load("TwoBoundPoints.RData")
