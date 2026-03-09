@@ -6,7 +6,7 @@ source("baseFunctions.R")
 source("plotting.R")
 library(lhs)
 library(tidyr)
-set.seed(42)
+set.seed(123)
 
 ## Model set-up for Gillespie algorithm
 Num <- 1000
@@ -32,7 +32,6 @@ out_index = 2
 t_point = 15
 ## Ranges for the three parameters
 ranges <- list(beta = c(0, 1.5), gamma = c(0, 0.5))
-set.seed(1)
 training_points <- data.frame(t(apply(
   lhs::optimumLHS(10*length(ranges), length(ranges)),
   1, function(x) {
@@ -87,8 +86,8 @@ wave0_output <- data.frame(wave0_results |> dplyr::group_by(across(all_of(names(
 
 ## Make the emulators
 ems_wave1 <- create_boundary_ems(wave0_results, out_name, ranges, reps,
-                                 SIR_functions, bb_data, N, c(0), c(1), out_index, t_point)
-
+                                 SIR_functions, bb_data, N, c(0), c(1), out_index, t_point,
+                                 thetas = c(0.75, 0.75))
 this_var_em <- ems_wave1$boundary_bulk$variance
 
 ## Create a 20x20 grid of points to evaluate mean emulator variance on
@@ -141,10 +140,10 @@ grid_plot(exp_df_reshape, "E", c("beta", "gamma"), "Mean", wave0_output, viridop
   scale_x_continuous(expand = c(0,0)) +
   scale_y_continuous(expand = c(0,0))
 grid_plot(exp_df_reshape, "V", c("beta", "gamma"), "Mean", wave0_output, viridoption = "C",
-          breaks = c(-1e-7, 10, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000),
+          breaks = c(-100, 10, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000),
           labels = c("[0, 10)", "[10, 50)", "[50, 100)", "[100, 200)",
                      "[200, 500)", "[500, 1000)", "[1000, 2000)", "[2000, 5000)",
-                     "[5000, 10000)", "[10000, 20000)")) +
+                     "[5000, 10000)", "[10000, 20000)", "[20000, 50000)")) +
   theme_minimal() +
   scale_x_continuous(expand = c(0,0)) +
   scale_y_continuous(expand = c(0,0))

@@ -97,7 +97,8 @@ get_results <- function(params, obj, nreps = 100, outs, times, raw = FALSE) {
 # a list of emulators: prior, bulk only, boundary only, and bulk-boundary.
 create_boundary_ems <- function(data_raw, out_name, ranges, reps,
                                 analytics, bb_data, model,
-                                vals = c(0), indices = c(1), out_index, t) {
+                                vals = c(0), indices = c(1), out_index, t,
+                                thetas = c(1,1)) {
   get_summary <- function(data, input_names, out_name) {
     data_uids <- apply(data[,input_names], 1, rlang::hash)
     unique_uids <- unique(data_uids)
@@ -114,22 +115,21 @@ create_boundary_ems <- function(data_raw, out_name, ranges, reps,
   #                      dplyr::summarise(exp = mean(.data[[out_name]]), var = var(.data[[out_name]])))
   data <- get_summary(data_raw, names(ranges), out_name)
   if (length(reps) == 1) reps <- rep(reps, nrow(data))
-  no_bound_ems <- hmer::emulator_from_data(data_raw, out_name, ranges,
-                                           emulator_type = "variance",
-                                           order = 1, beta.var = FALSE
-                                           # specified_priors = list(
-                                           #   expectation = list(delta = c(0.01)),
-                                           #   variance = list(delta = c(0.01))
-                                           # )
-                                           )
-  ## Slightly inflate theta
-  theta_factor <- 1.5
-  no_bound_ems$variance[[out_name]] <- no_bound_ems$variance[[out_name]]$set_hyperparams(
-    list(theta = theta_factor*no_bound_ems$variance[[out_name]]$corr$hyper_p$theta), nugget = 0
-  )  
-  no_bound_ems$expectation[[out_name]] <- no_bound_ems$expectation[[out_name]]$set_hyperparams(
-    list(theta = theta_factor*no_bound_ems$expectation[[out_name]]$corr$hyper_p$theta), nugget = 0
-  )
+  if (!is.null(thetas))
+    no_bound_ems <- hmer::emulator_from_data(data_raw, out_name, ranges,
+                                             emulator_type = "variance",
+                                             order = 1, beta.var = FALSE,
+                                             specified_priors = list(
+                                               variance = list(hyper_p = list(theta = thetas[1]), delta = 0),
+                                               expectation = list(hyper_p = list(theta = thetas[2]), delta = 0)
+                                             )
+    )
+  else
+    no_bound_ems <- hmer::emulator_from_data(data_raw, out_name, ranges,
+                                             emulator_type = "variance",
+                                             order = 1, beta.var = FALSE,
+                                             specified_priors = list(delta = 0)
+    )
   prior_var_em <- no_bound_ems$variance[[out_name]]$o_em
   prior_exp_em <- no_bound_ems$expectation[[out_name]]$o_em
   boundary_em <- hmer::Proto_emulator$new(
