@@ -6,7 +6,7 @@ source("modelFunctions.R")
 source("plotting.R")
 library(lhs)
 library(tidyr)
-set.seed(123)
+set.seed(1)
 
 ## SEIR Model specification
 N_SEIR <- list(
@@ -73,7 +73,7 @@ ranges <- list(
   gamma = c(0.05, 0.08),
   omega = c(0.002, 0.004)
 )
-npts <- 200
+npts <- 140
 
 training_points <- data.frame(t(apply(
   lhs::randomLHS(npts, length(ranges)),
@@ -141,7 +141,8 @@ wave0_output <- data.frame(wave0_results |> dplyr::group_by(across(all_of(names(
 
 ## Make the emulators
 ems_wave1 <- create_boundary_ems(wave0_results, out_name, ranges, reps,
-                                 SEIR_functions, bb_data, N_SEIR, 0, c(3,4), out_index, t_point)
+                                 SEIR_functions, bb_data, N_SEIR, 0, c(3,4), out_index, t_point,
+                                 thetas = NULL)
 
 ## Create a (comparatively) large grid to evaluate on
 big_grid <- expand.grid(
@@ -174,23 +175,19 @@ exp_df$Vboth[exp_df$Vboth < 0] <- 1e-6
 exp_df$Vno[exp_df$Vno < 0] <- 1e-6
 exp_df_reshape <- tidyr::pivot_longer(exp_df, cols = !c(1:7))
 grid_plot(exp_df_reshape, "E", c("beta", "epsilon"), viridoption = "D",
-          breaks = c(-1500, 0, 10, 25, 50, 100, 250, 500, 1000)) +
+          breaks = c(-100, 0, 10, 25, 50, 100, 200, 300, 400,  500, 1000)) +
   theme_minimal() +
   scale_x_continuous(expand = c(0.01,0.01)) +
   scale_y_continuous(expand = c(0.01,0.01))
 grid_plot(exp_df_reshape, "V", c("beta", "epsilon"),
-          breaks = c(0, 0.5, 1,
-                     10, 100, 1000,
-                     1e4, 1e6, 1e8, 1e10),
-          labels = c(TeX(r"(\[0, 0.25))"), #TeX(r"(\[0.25, 0.5))"),
-                     TeX(r"(\[0.5, 1))"), TeX(r"(\[1, 10))"),
-                     TeX(r"(\[10, 10^2))"),TeX(r"(\[10^2, 10^3))"),
-                     TeX(r"(\[10^3, 10^4))"),TeX(r"(\[10^4, 10^6))"),
-                     TeX(r"(\[10^6, 10^8))"), TeX(r"(\[10^8, 10^10))")),
+          breaks = c(0, 10, 50, 100, 200, 250, 260, 270,
+                     280, 290, 300, 400, 500,
+                     1000, 2000, 3000, 4000, 4500),
           viridoption = "C") +
   theme_minimal() +
   scale_x_continuous(expand = c(0.01,0.01)) +
   scale_y_continuous(expand = c(0.01,0.01))
+
 
 var_df <- cbind.data.frame(
   big_grid,
@@ -210,7 +207,7 @@ grid_plot(var_df_reshape, "E", c("beta", "epsilon"))
 grid_plot(var_df_reshape, "V", c("beta", "epsilon"))
 
 ## Create a collection of points on which to evaluate emulator variance
-test_lhs <- lhs::randomLHS(2500, length(ranges))
+test_lhs <- lhs::randomLHS(2000, length(ranges))
 small_test_grid <- data.frame(t(apply(test_lhs, 1, function(x) {
   x * purrr:::map_dbl(ranges, diff) + purrr::map_dbl(ranges, ~.[[1]])
 }))) |> setNames(names(ranges))
@@ -234,7 +231,7 @@ plan(multisession, workers = 8)
 new_design <- design_subselect(training_points,
                                ems_wave1$no_boundary$expectation$I$o_em, this_var_em,
                                rep(10, nrow(training_points)), ranges, small_test_grid,
-                               rep_max = 3000, pt_max = 300,
+                               rep_max = 2800, pt_max = 280,
                                store_order = TRUE, verbose = TRUE, return_scores = TRUE, ntoadd = 5,
                                boundary_col = c(3,4), boundary_val = 0
                                )
