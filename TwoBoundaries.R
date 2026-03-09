@@ -97,7 +97,7 @@ big_grid <- expand.grid(
 )
 for (nm in names(ranges)) {
   if (nm != "beta" && nm != "epsilon")
-    big_grid[,nm] <- 0.8*sum(ranges[[nm]])
+    big_grid[,nm] <- 0.5*sum(ranges[[nm]])
 }
 big_grid <- big_grid[,names(ranges)]
 
@@ -120,13 +120,24 @@ exp_df$Vbound[exp_df$Vbound < 0] <- 1e-6
 exp_df$Vboth[exp_df$Vboth < 0] <- 1e-6
 exp_df$Vno[exp_df$Vno < 0] <- 1e-6
 exp_df_reshape <- tidyr::pivot_longer(exp_df, cols = !c(1:7))
-grid_plot(exp_df_reshape, "E", c("beta", "epsilon"),
-          breaks = c(-100, 0, 10, 20, 50, 100, 150, 200, 300), viridoption = "D")
-grid_plot(exp_df_reshape, "V", c("beta", "epsilon"),
-          breaks = c(-1, 0, 0.1, 0.5, 1, 2, 5, 10, 50, 100, 250, 1000, 2000), viridoption = "C") +
+grid_plot(exp_df_reshape, "E", c("beta", "epsilon"), viridoption = "D",
+          breaks = c(-50, 0, 10, 25, 50, 100, 200, 300, 400)) +
   theme_minimal() +
-  scale_x_continuous(expand = c(0,0)) +
-  scale_y_continuous(expand = c(0,0))
+  scale_x_continuous(expand = c(0.01,0.01)) +
+  scale_y_continuous(expand = c(0.01,0.01))
+grid_plot(exp_df_reshape, "V", c("beta", "epsilon"),
+          breaks = c(0, 0.25, 0.5, 1,
+                     10, 100, 1000,
+                     1e4, 1e6, 1e8),
+          labels = c(TeX(r"(\[0, 0.25))"), TeX(r"(\[0.25, 0.5))"),
+                     TeX(r"(\[0.5, 1))"), TeX(r"(\[1, 10))"),
+                     TeX(r"(\[10, 10^2))"),TeX(r"(\[10^2, 10^3))"),
+                     TeX(r"(\[10^3, 10^4))"),TeX(r"(\[10^4, 10^6))"),
+                     TeX(r"(\[10^6, 10^8))")),
+          viridoption = "C") +
+  theme_minimal() +
+  scale_x_continuous(expand = c(0.01,0.01)) +
+  scale_y_continuous(expand = c(0.01,0.01))
 
 var_df <- cbind.data.frame(
   big_grid,
@@ -146,7 +157,7 @@ grid_plot(var_df_reshape, "E", c("beta", "epsilon"))
 grid_plot(var_df_reshape, "V", c("beta", "epsilon"))
 
 ## Create a collection of points on which to evaluate emulator variance
-test_lhs <- lhs::randomLHS(1000, length(ranges))
+test_lhs <- lhs::randomLHS(5000, length(ranges))
 small_test_grid <- data.frame(t(apply(test_lhs, 1, function(x) {
   x * purrr:::map_dbl(ranges, diff) + purrr::map_dbl(ranges, ~.[[1]])
 }))) |> setNames(names(ranges))
@@ -158,23 +169,23 @@ small_test_grid <- data.frame(t(apply(test_lhs, 1, function(x) {
 this_var_em <- ems_wave1$boundary_bulk$variance
 ## This takes a while, even with parallelisation - included RData file, but
 # uncomment to reproduce.
-# ## Set up the cluster for optimParallel; load in required pieces
-# cl <- makeCluster(8); setDefaultCluster(cl = cl)
-# clusterEvalQ(cl, library("dplyr"))
-# clusterEvalQ(cl, library("hmer"))
-# clusterExport(cl, c("new_point_score", "mean_em_var", "r1", "R1",
-#                     "part_inv"))
-# ## Create the plan for furrr
-# plan(multisession, workers = 8)
-# ## Produce new design
-# new_design <- design_subselect(training_points,
-#                                ems_wave1$no_boundary$expectation$I$o_em, this_var_em,
-#                                rep(10, nrow(training_points)), ranges, small_test_grid,
-#                                rep_max = 20*nrow(training_points), pt_max = 2*nrow(training_points),
-#                                store_order = TRUE, verbose = TRUE, return_scores = TRUE, ntoadd = 2,
-#                                boundary_col = c(3,4), boundary_val = 0
-#                                )
-load("TwoBoundPoints.RData")
+## Set up the cluster for optimParallel; load in required pieces
+cl <- makeCluster(8); setDefaultCluster(cl = cl)
+clusterEvalQ(cl, library("dplyr"))
+clusterEvalQ(cl, library("hmer"))
+clusterExport(cl, c("new_point_score", "mean_em_var", "r1", "R1",
+                    "part_inv"))
+## Create the plan for furrr
+plan(multisession, workers = 8)
+## Produce new design
+new_design <- design_subselect(training_points,
+                               ems_wave1$no_boundary$expectation$I$o_em, this_var_em,
+                               rep(10, nrow(training_points)), ranges, small_test_grid,
+                               rep_max = 20*nrow(training_points), pt_max = 2*nrow(training_points),
+                               store_order = TRUE, verbose = TRUE, return_scores = TRUE, ntoadd = 2,
+                               boundary_col = c(3,4), boundary_val = 0
+                               )
+#load("TwoBoundPoints.RData")
 
 ## Plotting the results of the proposal
 is_old <- rep(c(TRUE, FALSE), each = 140)

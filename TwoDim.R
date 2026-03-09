@@ -6,7 +6,7 @@ source("baseFunctions.R")
 source("plotting.R")
 library(lhs)
 library(tidyr)
-set.seed(123)
+set.seed(2)
 
 ## Model set-up for Gillespie algorithm
 Num <- 1000
@@ -86,8 +86,7 @@ wave0_output <- data.frame(wave0_results |> dplyr::group_by(across(all_of(names(
 
 ## Make the emulators
 ems_wave1 <- create_boundary_ems(wave0_results, out_name, ranges, reps,
-                                 SIR_functions, bb_data, N, c(0), c(1), out_index, t_point,
-                                 thetas = c(0.75, 0.75))
+                                 SIR_functions, bb_data, N, c(0), c(1), out_index, t_point)
 this_var_em <- ems_wave1$boundary_bulk$variance
 
 ## Create a 20x20 grid of points to evaluate mean emulator variance on
@@ -137,21 +136,24 @@ grid_plot(exp_df_reshape, "E", c("beta", "gamma"), "Mean", wave0_output, viridop
           labels = c("(-250, 0]", "[0, 100)", "[100, 200)", "[200, 300)",
                      "[300, 500)", "[500, 750)", "[750, 1000)", "[1000, 1200)")) +
   theme_minimal() +
-  scale_x_continuous(expand = c(0,0)) +
-  scale_y_continuous(expand = c(0,0))
+  scale_x_continuous(expand = c(0.01,0.01)) +
+  scale_y_continuous(expand = c(0.01,0.01))
 grid_plot(exp_df_reshape, "V", c("beta", "gamma"), "Mean", wave0_output, viridoption = "C",
-          breaks = c(-100, 10, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000),
-          labels = c("[0, 10)", "[10, 50)", "[50, 100)", "[100, 200)",
-                     "[200, 500)", "[500, 1000)", "[1000, 2000)", "[2000, 5000)",
-                     "[5000, 10000)", "[10000, 20000)", "[20000, 50000)")) +
+          breaks = c(-100, 10, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 50000, 1e6),
+          labels = c(TeX("$\\[0, 10)$"), TeX("$\\[10, 50)$"),
+                     TeX("$\\[50, 100)$"), TeX("$\\[100, 200)$"),
+                     TeX("$\\[200, 500)$"), TeX("$\\[500, 10^3)$"),
+                     TeX(r"($\[10^3, 2\times 10^3)$)"), TeX(r"($\[2\times 10^3, 5\times 10^3)$)"),
+                     TeX(r"($\[5\times 10^3, 10^4)$)"), TeX(r"($\[10^4, 5\times 10^4)$)"),
+                     TeX(r"($\[5\times 10^4, 10^6)$)"))) +
   theme_minimal() +
-  scale_x_continuous(expand = c(0,0)) +
-  scale_y_continuous(expand = c(0,0))
+  scale_x_continuous(expand = c(0.01,0.01)) +
+  scale_y_continuous(expand = c(0.01,0.01))
 
 var_df <- cbind.data.frame(
   big_grid,
   data.frame(
-    Ebulk = ems_wave1$no_boundary$variance[[out_name]]$get_exp(big_grid),
+    Ebulk = ems_wave1$no_boundary$variance[[out_name]]$get_exp(big_grid, check_neg = FALSE),
     Vbulk = ems_wave1$no_boundary$variance[[out_name]]$get_cov(big_grid),
     Ebound = ems_wave1$boundary$variance$get_exp(big_grid),
     Vbound = ems_wave1$boundary$variance$get_cov(big_grid),
@@ -162,20 +164,26 @@ var_df <- cbind.data.frame(
   )
 )
 var_df_reshape <- tidyr::pivot_longer(var_df, cols = !c(1:2))
-grid_plot(var_df_reshape, "E", c("beta", "gamma"), "Variance", wave0_output, breaks = c(-400, 10, 50, 100, 200, 300, 400, 500, 1000),
-          labels = c("[0,10)", "[10, 50)", "[50,100)", "[100,200)", "[200,300)", "[300,400)", "[400,500)", "[500,1000)"),
-          viridoption = "D") +
+grid_plot(var_df_reshape, "E", c("beta", "gamma"), "Variance", wave0_output,
+          viridoption = "D",
+          breaks = c(-200, 0, 5, 10, 50, 100, 500, 1000, 2000, 5000)) +
   theme_minimal() +
-  scale_x_continuous(expand = c(0,0)) +
-  scale_y_continuous(expand = c(0,0))
-grid_plot(var_df_reshape, "V", c("beta", "gamma"), "Variance", wave0_output, 
-          breaks = c(0, 1000, 5000, 10000, 20000, 30000, 40000, 50000, 100000),
-          labels = c("[0, 1000)", "[1000, 5000)", "[5000, 10000)", "[10000, 20000)", "[20000, 30000)",
-                     "[30000, 40000)", "[40000, 50000)", "[50000, 100000)"),
-          viridoption = "C") +
+  scale_x_continuous(expand = c(0.01,0.01)) +
+  scale_y_continuous(expand = c(0.01,0.01))
+grid_plot(var_df_reshape, "V", c("beta", "gamma"), "Variance", wave0_output,
+          viridoption = "C",
+          breaks = c(-1, 10, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8),
+          labels = c(TeX("$\\[10^0, 10^1)$"),
+                     TeX("$\\[10^1, 10^2)$"),
+                     TeX("$\\[10^2, 10^3)$"),
+                     TeX("$\\[10^3, 10^4)$"),
+                     TeX("$\\[10^4, 10^5)$"),
+                     TeX("$\\[10^5, 10^6)$"),
+                     TeX("$\\[10^6, 10^7)$"),
+                     TeX("$\\[10^7, 10^8)$"))) +
   theme_minimal() +
-  scale_x_continuous(expand = c(0,0)) +
-  scale_y_continuous(expand = c(0,0))
+  scale_x_continuous(expand = c(0.01,0.01)) +
+  scale_y_continuous(expand = c(0.01,0.01))
 
 ## Plotting the result of the proposal
 get_loc <- function(y) {
@@ -184,12 +192,12 @@ get_loc <- function(y) {
 }
 ggplot(data = subset(exp_df_reshape, name == "Vboth"), aes(x = beta, y = gamma)) +
   geom_raster(aes(fill = value), interpolate = TRUE) +
-  scale_fill_gradientn(name = "Var", colours = viridis::viridis(10, option = "C"),
-                       values = c(0, 0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.075, 0.1, 0.2, 0.5, 0.75, 1)) +
-  geom_point(data = new_design$points, col = rep(c("grey", "white"), each = 20), size = rep(c(0.8, 1), each = 20)) +
+  scale_fill_gradientn(name = "Var", colours = viridis::viridis(17, option = "A"),
+                       values = c(0, 0.00625, 0.0125, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1)) +
+  geom_point(data = new_design$points, col = rep(c("grey40", "white"), each = 20), size = rep(c(0.8, 1), each = 20)) +
   geom_text(data = new_design$points, aes(label = reps),
             y = sapply(new_design$points$gamma, get_loc),
-            col = rep(c("grey", "white"), each = 20), size = rep(c(3, 4), each = 20)) +
+            col = rep(c("grey40", "white"), each = 20), size = rep(c(3, 4), each = 20)) +
   theme_minimal() +
   scale_x_continuous(expand = c(0,0.01)) +
   scale_y_continuous(expand = c(0.01,0)) +
@@ -255,10 +263,17 @@ all_var_df <- cbind.data.frame(cbind.data.frame(big_grid, new_vars), cbind.data.
   setNames(c('beta', 'gamma', 'New', 'Naive', "Uniform", "Old"))
 
 comparison_plot(all_var_df, c("Old", "Naive", "Uniform", "New"), c("beta", "gamma"), "Variance",
-                breaks = c(0, 0.1, 0.25, 0.5, 1, 5, 10, 100, 200, 500, 1000, 10000),
-                labels = c("(0, 0.1]", "(0.1, 0.25]", "(0.25, 0.5]", "(0.5, 1]", "(1, 5]", "(5, 10]",
-                           "(10, 100]", "(100, 200]", "(200, 500]", "(500, 1000]", "(1000, 10000]"),
-                viridoption = "C")
+                breaks = c(0, 10, 50, 100, 200, 500, 1000, 10000, 100000),
+                labels = c(
+                  TeX(r"($\[0, 10)$)"), TeX(r"($\[10, 50)$)"),
+                  TeX(r"($\[50, 100)$)"), TeX(r"($\[100, 200)$)"),
+                  TeX(r"($\[200, 500)$)"), TeX(r"($\[500, 10^4)$)"),
+                  TeX(r"($\[10^4, 10^5)$)"), TeX(r"($\[10^5, 10^6)$)")
+                ),
+                viridoption = "C") +
+  theme_minimal() +
+  scale_x_continuous(expand = c(0.01,0.01)) +
+  scale_y_continuous(expand = c(0.01,0.01))
 #### Paper Plots End Here ####
 
 

@@ -41,30 +41,36 @@ redgreen <- c('#00FF00', '#18FF00', '#31FF00', '#49FF00', '#62FF00',
 grid_plot <- function(data, prefix, plot_names = c("beta", "gamma"), title_add = "", training_pts = NULL,
                       breaks = NULL, labels = NULL, viridoption = "A") {
   data$name <- factor(data$name, levels = paste0(prefix, c("no", "bound", "bulk", "both")))
-  if (prefix == "E") p_title <- paste(title_add, "Emulator Expectation")
-  if (prefix == "V") p_title <- paste(title_add, "Emulator Variance")
+  if (prefix == "E") {
+    p_title <- paste(title_add, "Emulator Expectation")
+    p_name <- "Exp"
+  }
+  if (prefix == "V") {
+    p_title <- paste(title_add, "Emulator Variance")
+    p_name <- "Var"
+  }
   if (prefix == "I") p_title <- paste(title_add, "Emulator Implausibility")
   dat_subs <- data[grep(prefix, data$name),]
   g <- ggplot(data = dat_subs, aes(x = .data[[plot_names[1]]], y = .data[[plot_names[2]]]))
   if (prefix != "I") {
     if (is.null(breaks)) {
       g <- g + geom_contour_filled(aes(z = value)) +
-        scale_fill_viridis(discrete = TRUE, option = viridoption) + guides(fill = guide_legend(ncol = 1))
+        scale_fill_viridis(discrete = TRUE, option = viridoption, name = p_name) + guides(fill = guide_legend(ncol = 1))
     }
     else {
       if (is.null(labels))
         g <- g + geom_contour_filled(aes(z = value), breaks = breaks) +
-          scale_fill_viridis(discrete = TRUE, option = viridoption) + guides(fill = guide_legend(ncol = 1))
+          scale_fill_viridis(discrete = TRUE, option = viridoption, name = p_name) + guides(fill = guide_legend(ncol = 1))
       else
         g <- g + geom_contour_filled(aes(z = value), breaks = breaks) +
-          scale_fill_viridis(discrete = TRUE, option = viridoption, labels = labels) + guides(fill = guide_legend(ncol = 1))
+          scale_fill_viridis(discrete = TRUE, option = viridoption, labels = labels, name = p_name) + guides(fill = guide_legend(ncol = 1))
     }
   }
   else {
     g <- g + geom_contour_filled(aes(z = value), colour = 'black', linewidth = 0.1, breaks = imp_breaks) +
       geom_contour(aes(z = value), breaks = c(0, 3, Inf), colour = 'black') + 
       scale_fill_manual(values = redgreen, name = "I", labels = imp_names,
-                               guide = guide_legend(ncol = 1, reverse = TRUE))
+                               guide = guide_legend(ncol = 1, reverse = TRUE), name = p_name)
   }
   if (!is.null(training_pts)) {
     g <- g + geom_point(data = training_pts)
