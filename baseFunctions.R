@@ -238,7 +238,8 @@ mean_em_var <- function(pt, pre_em, var_em, data, reps, boundary_col = 1, bounda
   }
   diag_res <- mahalanobis(term2a, center = FALSE, cov = term2b, inverted = TRUE)
   complete <- term1 - diag_res
-  complete[complete < 0] <- 1e-6
+  complete <- complete[complete > 0]
+  #complete[complete < 0] <- 1e-6
   return(mean(complete))
 }
 # Calculate the score due to including a new design point
@@ -274,7 +275,8 @@ new_rep_score <- function(index, points, pre_em, var_em, reps, grid, invmat, nto
 design_subselect <- function(data, pre_em, var_em, reps, ranges, testgrid,
                               rep_max, pt_max, ntoadd = 1,
                               store_order = FALSE, verbose = FALSE,
-                              return_scores = FALSE, boundary_col = 1, boundary_val = 0) {
+                              return_scores = FALSE, boundary_col = 1, boundary_val = 0,
+                             rep_favour_factor = 1) {
   if (store_order) order_vector <- c()
   if (return_scores) {
     r_scores <- c()
@@ -338,8 +340,10 @@ design_subselect <- function(data, pre_em, var_em, reps, ranges, testgrid,
   failsafe <- 0
   while(sum(reps) < rep_max && failsafe < 10000) {
     rep_suggest <- find_next_rep(data, pre_em, var_em, reps, ntoadd, boundary_col, boundary_val)
-    if (nrow(data) < pt_max)
+    if (nrow(data) < pt_max) {
       pt_suggest <- find_next_point(data, pre_em, var_em, reps, ranges, ntoadd, boundary_col, boundary_val)
+      pt_suggest$val <- rep_favour_factor * pt_suggest$val
+    }
     else
       pt_suggest <- NULL
     if (verbose) {

@@ -212,6 +212,13 @@ small_test_grid <- data.frame(t(apply(test_lhs, 1, function(x) {
   x * purrr:::map_dbl(ranges, diff) + purrr::map_dbl(ranges, ~.[[1]])
 }))) |> setNames(names(ranges))
 
+## Just testing behaviour of mean_em_var
+# cov_mat <- this_var_em$get_cov(training_points, full = TRUE)
+# imat <- MASS::ginv(cov_mat)
+# mean_em_var(small_test_grid[20:40,], ems_wave1$no_boundary$expectation$I,
+#             this_var_em, training_points, rep(10, 140), boundary_col = c(3,4),
+#             boundary_val = 0, imat, new_method = TRUE)
+
 ## Create design for next wave of emulation
 ## Uses parallelisation if available:
 # futures: furrr::map (for rep_scores)
@@ -233,7 +240,7 @@ new_design <- design_subselect(training_points,
                                rep(10, nrow(training_points)), ranges, small_test_grid,
                                rep_max = 2800, pt_max = 280,
                                store_order = TRUE, verbose = TRUE, return_scores = TRUE, ntoadd = 5,
-                               boundary_col = c(3,4), boundary_val = 0
+                               boundary_col = c(3,4), boundary_val = 0, rep_favour_factor = 1.001
                                )
 #load("TwoBoundPoints.RData")
 
