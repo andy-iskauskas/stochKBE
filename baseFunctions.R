@@ -265,6 +265,22 @@ new_rep_score <- function(index, points, pre_em, var_em, reps, grid, invmat, nto
   return(vars)
 }
 
+rep_allocate <- function(points, var_em, rep_max, ntoadd) {
+  v_em_vals <- var_em$get_exp(points)
+  rep_vals <- points$reps
+  rep_vals[!is.finite(rep_vals)] <- ntoadd
+  total_reps <- sum(rep_vals)
+  while(total_reps < rep_max) {
+    old_v_vals <- v_em_vals/rep_vals
+    new_v_vals <- v_em_vals/(rep_vals + ntoadd)
+    rep_add_index <- which.max(old_v_vals - new_v_vals)
+    rep_vals[rep_add_index] <- rep_vals[rep_add_index] + ntoadd
+    total_reps = total_reps + ntoadd
+  }
+  points$reps <- rep_vals
+  return(points)
+}
+
 ## Chooses an 'optimal' design
 # Given a set of data points, progressively adds points to a candidate
 # set or adds a rep to an existing point in the candidate set. Calculations of
