@@ -90,7 +90,20 @@ ems_wave1 <- create_boundary_ems(wave0_results, out_name, ranges, reps,
 this_var_em <- ems_wave1$boundary_bulk$variance
 
 ## Create a 20x20 grid of points to evaluate mean emulator variance on
-small_test_grid <- expand.grid(beta = seq(0, 1.5, length.out = 40), gamma = seq(0, 0.5, length.out = 40))
+small_test_grid <- expand.grid(beta = seq(0, 1.5, length.out = 10), gamma = seq(0, 0.5, length.out = 10))
+
+source("baseFunctions.R")
+cl <- makeCluster(8); setDefaultCluster(cl = cl)
+clusterEvalQ(cl, library(dplyr))
+clusterEvalQ(cl, library(hmer))
+clusterExport(cl, c("imspe", "part_inv", "small_test_grid", "R1", "r1"))
+new_design_test <- point_design(training_points, ems_wave1$boundary$expectation, ems_wave1$boundary_bulk$variance,
+                                rep(10, 20), ranges, small_test_grid, 40, verbose = TRUE, return_scores = TRUE,
+                                in_par = TRUE)
+plot(x = new_design_test$points$beta, y = new_design_test$points$gamma, pch = 16, col = rep(c("grey", "black"), each = 20))
+
+design_with_reps <- rep_allocate(new_design_test$points, ems_wave1$boundary_bulk$variance, 400, 2)
+
 ## Create design for next wave of emulation
 ## Next 4 lines relevant if optimParallel is installed
 cl <- makeCluster(8); setDefaultCluster(cl = cl)

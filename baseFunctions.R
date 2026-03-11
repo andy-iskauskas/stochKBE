@@ -281,6 +281,90 @@ rep_allocate <- function(points, var_em, rep_max, ntoadd) {
   return(points)
 }
 
+imspe <- function(grid, b_em, v_em, data, reps,
+                  invmat, new_point = NULL,
+                  new_method = (nrow(data) > 70)) {
+  if (!is.null(new_point)) {
+    n_data <- rbind.data.frame(data, new_point)
+  }
+  else {
+    n_data <- data
+  }
+  term1 <- b_em$get_cov(grid)
+  term2a <- b_em$get_cov(grid, n_data, full = TRUE)
+  if (!is.null(new_point) && new_method) {
+    if (missing(invmat)) {
+      vmat <- b_em$get_cov(data, full = TRUE)
+      invmat <- tryCatch(chol2inv(chol(vmat)), error = function(e) MASS::ginv(vmat))
+    }
+    b <- b_em$get_cov(data, new_point, full = TRUE)
+    c <- b_em$get_cov(new_point)
+    term2b <- part_inv(invmat, b, c)
+  }
+  else {
+    var_em_vals <- v_em$get_exp(data)
+    var_em_vals[var_em_vals < 0] <- 1e-6
+    t1 <- b_em$get_cov(n_data, full = TRUE)
+    t2 <- diag(c(var_em_vals/reps, 0))
+    term2binv <- b_em$get_cov(n_data, full = TRUE)
+    if (!is.null(new_point))
+      term2binv <- term2binv + diag(c(var_em_vals/reps, 0))
+    else
+      term2binv <- term2binv + diag(var_em_vals/reps)
+    term2b <- tryCatch(chol2inv(chol(term2binv)), error = function(e) MASS::ginv(term2binv))
+  }
+  diag_res <- mahalanobis(term2a, center = FALSE, cov = term2b, inverted = TRUE)
+  complete <- term1 - diag_res
+  return(mean(complete))
+}
+
+## New 'optimal' design strategy
+point_design <- function(data, b_em, v_em, reps, ranges, testgrid, pt_max,
+                         verbose = FALSE, return_scores = FALSE, in_par = FALSE) {
+  if (return_scores)
+    p_scores <- c()
+  find_next_point <- function(data, b_em, v_em, reps, ranges) {
+    v_em_vals <- v_em$get_exp(data)
+    v_em_vals[v_em_vals < 0] <- 1e-6
+    start_inv <- b_em$get_cov(data, full = TRUE) + diag(v_em_vals/reps)
+    start <- tryCatch(chol2inv(chol(start_inv)), error = function(e) MASS::ginv(start_inv))
+    opt_func <- function(x) {
+      imspe(testgrid, b_em, v_em, data, reps, start, x)
+    }
+    if (has_par_optim && in_par)
+      optimised <- optimParallel(map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
+                                 lower = map_dbl(ranges, ~.[[1]]+0.01*diff(.)),
+                                 upper = map_dbl(ranges, ~.[[2]]-0.01*diff(.)),
+                                 control = list(trace = FALSE))
+    else
+      optimised <- optim(map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
+                         lower = map_dbl(ranges, ~.[[1]]+0.01*diff(.)),
+                         upper = map_dbl(ranges, ~.[[2]]-0.01*diff(.)),
+                         method = "L-BFGS-B", control = list(trace = FALSE))
+    this_val <- optimised$value
+    this_pt <- data.frame(matrix(optimised$par, nrow = 1)) |> setNames(names(ranges))
+    return(list(val = this_val, point = this_pt))
+  }
+  counter <- 0
+  while(nrow(data) < pt_max) {
+    pt_suggest <- find_next_point(data, b_em, v_em, reps, ranges)
+    if (verbose) {
+      print_str <- paste0("Proposal ", counter+1, ": Point score ", signif(pt_suggest$val, 4))
+      print(print_str)
+    }
+    if (return_scores) {
+      p_scores <- c(p_scores, pt_suggest$val)
+    }
+    data <- rbind.data.frame(data, pt_suggest$point)
+    reps <- c(reps, Inf)
+    counter <- counter + 1
+  }
+  pts_with_reps <- cbind.data.frame(data, reps) |> setNames(c(names(data), "reps"))
+  if (return_scores)
+    return(list(points = pts_with_reps, pt_scores = p_scores))
+  return(pts_with_reps)
+}
+
 ## Chooses an 'optimal' design
 # Given a set of data points, progressively adds points to a candidate
 # set or adds a rep to an existing point in the candidate set. Calculations of
