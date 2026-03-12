@@ -90,9 +90,8 @@ ems_wave1 <- create_boundary_ems(wave0_results, out_name, ranges, reps,
 this_var_em <- ems_wave1$boundary_bulk$variance
 
 ## Create a 20x20 grid of points to evaluate mean emulator variance on
-small_test_grid <- expand.grid(beta = seq(0, 1.5, length.out = 10), gamma = seq(0, 0.5, length.out = 10))
+small_test_grid <- expand.grid(beta = seq(0, 1.5, length.out = 40), gamma = seq(0, 0.5, length.out = 40))
 
-source("baseFunctions.R")
 cl <- makeCluster(8); setDefaultCluster(cl = cl)
 clusterEvalQ(cl, library(dplyr))
 clusterEvalQ(cl, library(hmer))
@@ -207,9 +206,9 @@ ggplot(data = subset(exp_df_reshape, name == "Vboth"), aes(x = beta, y = gamma))
   geom_raster(aes(fill = value), interpolate = TRUE) +
   scale_fill_gradientn(name = "Var", colours = viridis::viridis(17, option = "A"),
                        values = c(0, 0.00625, 0.0125, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1)) +
-  geom_point(data = new_design$points, col = rep(c("grey40", "white"), each = 20), size = rep(c(0.8, 1), each = 20)) +
-  geom_text(data = new_design$points, aes(label = reps),
-            y = sapply(new_design$points$gamma, get_loc),
+  geom_point(data = design_with_reps, col = rep(c("grey40", "white"), each = 20), size = rep(c(0.8, 1), each = 20)) +
+  geom_text(data = design_with_reps, aes(label = reps),
+            y = sapply(design_with_reps$gamma, get_loc),
             col = rep(c("grey40", "white"), each = 20), size = rep(c(3, 4), each = 20)) +
   theme_minimal() +
   scale_x_continuous(expand = c(0,0.01)) +
