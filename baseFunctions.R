@@ -318,18 +318,41 @@ imspe <- function(grid, b_em, v_em, data, reps,
   return(mean(complete))
 }
 
+imspe2 <- function(pt, pre_em, data,
+                   new_point, invmat,
+                   boundary_col = 1, boundary_val = 0) {
+  n_data <- rbind.data.frame(data, new_point)
+  data_mutate <- (n_data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
+  pt_mutate <- (pt |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
+  term1 <- pre_em$u_sigma^2 * (1-r1(pt, pre_em, boundary_val, boundary_col)^2)
+  term2a <- R1(pt, n_data, pre_em, boundary_val, boundary_col) * 
+    pre_em$get_cov(pt_mutate, data_mutate, full = TRUE)
+  b <- R1(data, new_point, pre_em, boundary_val, boundary_col) *
+    pre_em$get_cov(data_mutate[-nrow(data_mutate),], data_mutate[nrow(data_mutate),,drop=FALSE])
+  c <- as.numeric(R1(new_point, new_point, pre_em, boundary_val, boundary_col) * 
+                    pre_em$get_cov(data_mutate[nrow(data_mutate),,drop=FALSE]))
+  term2b <- part_inv(invmat, b, c)
+  diag_res <- mahalanobis(term2a, center = FALSE, cov = term2b, inverted = TRUE)
+  complete <- term1 - diag_res
+  complete <- complete[complete > 0]
+  return(mean(complete))
+}
+
 ## New 'optimal' design strategy
 point_design <- function(data, b_em, v_em, reps, ranges, testgrid, pt_max,
+                         boundary_col, boundary_val,
                          verbose = FALSE, return_scores = FALSE, in_par = FALSE) {
   if (return_scores)
     p_scores <- c()
   find_next_point <- function(data, b_em, v_em, reps, ranges) {
-    v_em_vals <- v_em$get_exp(data)
-    v_em_vals[v_em_vals < 0] <- 1e-6
-    start_inv <- b_em$get_cov(data, full = TRUE) + diag(v_em_vals/reps)
-    start <- tryCatch(chol2inv(chol(start_inv)), error = function(e) MASS::ginv(start_inv))
+    datamutate <- (data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
+    start_mat <- R1(data, data, b_em, boundary_val, boundary_col) * b_em$get_cov(datamutate, full = TRUE) + diag(v_em$get_exp(data)/reps)
+    start_inv <- tryCatch(chol2inv(chol(start_mat)), error = function(e) MASS::ginv(start_mat))
+    print(dim(start_inv))
     opt_func <- function(x) {
-      imspe(testgrid, b_em, v_em, data, reps, start, x)
+      x_mod <- data.frame(matrix(x, nrow = 1)) |> setNames(names(ranges))
+      x_mod <- x_mod[,names(ranges), drop = FALSE]
+      imspe2(testgrid, b_em, data, x_mod, start_inv, boundary_col, boundary_val)
     }
     if (has_par_optim && in_par)
       optimised <- optimParallel(map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
