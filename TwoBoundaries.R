@@ -240,8 +240,9 @@ new_design <- design_subselect(training_points,
                                rep(10, nrow(training_points)), ranges, small_test_grid,
                                rep_max = 2800, pt_max = 280,
                                store_order = TRUE, verbose = TRUE, return_scores = TRUE, ntoadd = 5,
-                               boundary_col = c(3,4), boundary_val = 0, rep_favour_factor = 1.001
+                               boundary_col = c(3,4), boundary_val = 0
                                )
+save.image("TwoBoundaries190326.RData")
 #load("TwoBoundPoints.RData")
 
 ## Plotting the results of the proposal
@@ -249,13 +250,13 @@ is_old <- rep(c(TRUE, FALSE), each = 140)
 is_distant <- purrr::map_lgl(seq_len(nrow(new_design$points)), function(i) {
   sqrt(sum((new_design$points[i,-c(3,4,8)]-purrr::map_dbl(ranges[-c(3:4)], ~sum(.)*0.6))^2)) > 0.01
 })
-ggplot(data = subset(exp_df_reshape, name == "Vboth"), aes(x = beta, y = eps)) +
+ggplot(data = subset(exp_df_reshape, name == "Vboth"), aes(x = beta, y = epsilon)) +
   geom_contour_filled(aes(z = value), alpha = 0.6) +
-  scale_fill_viridis(discrete = TRUE, name = "Var",
-                     labels = c("(0, 5]", "(5, 10]", "(10, 15]", "(15, 20]", "(20, 25]", "(25, 30]")) +
+  scale_fill_viridis(discrete = TRUE, name = "Var") +#,
+                     #labels = c("(0, 5]", "(5, 10]", "(10, 15]", "(15, 20]", "(20, 25]", "(25, 30]")) +
   geom_point(data = new_design$points, col = ifelse(is_old, "grey", "black"),
              pch = ifelse(is_old, 4, 16), size = ifelse(is_distant, 0.75, 1.5)) +
-  geom_text(data = new_design$points, aes(y = eps + 0.0025,label = reps),
+  geom_text(data = new_design$points, aes(y = epsilon + 0.0025, label = reps),
             col = ifelse(is_old, "grey", "black"), size = ifelse(is_distant, 2, 3))
 
 ## Training new emulators

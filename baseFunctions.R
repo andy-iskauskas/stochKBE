@@ -203,7 +203,7 @@ mean_em_var <- function(pt, pre_em, var_em, data, reps, boundary_col = 1, bounda
     datamutate <- (data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
   }
   ptmutate <- (pt |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
-  term1 <- pre_em$u_sigma^2 * (1-r1(pt, pre_em)^2)
+  term1 <- pre_em$u_sigma^2 * (1-r1(pt, pre_em, boundary_val, boundary_col)^2)
   if (!is.null(new_point) && new_method) {
     npmutate <- (new_point |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
     term2a <- R1(pt, n_data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(ptmutate, datamutate, full = TRUE)
@@ -339,16 +339,20 @@ imspe2 <- function(pt, pre_em, data,
 }
 
 ## New 'optimal' design strategy
-point_design <- function(data, b_em, v_em, reps, ranges, testgrid, pt_max,
-                         boundary_col, boundary_val,
+point_design <- function(data, b_em, v_em, reps, ranges, testgrid_pts, pt_max,
+                         boundary_col, boundary_val, nrepsadd = reps[1],
                          verbose = FALSE, return_scores = FALSE, in_par = FALSE) {
   if (return_scores)
     p_scores <- c()
   find_next_point <- function(data, b_em, v_em, reps, ranges) {
+    tlhs <- lhs::randomLHS(testgrid_pts, length(ranges))
+    testgrid <- data.frame(t(apply(tlhs, 1, function(x) {
+      x * purrr::map_dbl(ranges, diff) + purrr::map_dbl(ranges, ~.[[1]])
+    }))) |> setNames(names(ranges))
     datamutate <- (data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
-    start_mat <- R1(data, data, b_em, boundary_val, boundary_col) * b_em$get_cov(datamutate, full = TRUE) + diag(v_em$get_exp(data)/reps)
+    start_mat <- R1(data, data, b_em, boundary_val, boundary_col) * b_em$get_cov(datamutate, full = TRUE) +
+      diag(1/v_em$get_exp(data) * reps)
     start_inv <- tryCatch(chol2inv(chol(start_mat)), error = function(e) MASS::ginv(start_mat))
-    print(dim(start_inv))
     opt_func <- function(x) {
       x_mod <- data.frame(matrix(x, nrow = 1)) |> setNames(names(ranges))
       x_mod <- x_mod[,names(ranges), drop = FALSE]
@@ -356,13 +360,17 @@ point_design <- function(data, b_em, v_em, reps, ranges, testgrid, pt_max,
     }
     if (has_par_optim && in_par)
       optimised <- optimParallel(map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
-                                 lower = map_dbl(ranges, ~.[[1]]+0.01*diff(.)),
-                                 upper = map_dbl(ranges, ~.[[2]]-0.01*diff(.)),
+                                 lower = map_dbl(ranges, ~.[[1]]),
+                                 upper = map_dbl(ranges, ~.[[2]]),
+                                 # lower = map_dbl(ranges, ~.[[1]]+0.01*diff(.)),
+                                 # upper = map_dbl(ranges, ~.[[2]]-0.01*diff(.)),
                                  control = list(trace = FALSE))
     else
       optimised <- optim(map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
-                         lower = map_dbl(ranges, ~.[[1]]+0.01*diff(.)),
-                         upper = map_dbl(ranges, ~.[[2]]-0.01*diff(.)),
+                         lower = map_dbl(ranges, ~.[[1]]),
+                         upper = map_dbl(ranges, ~.[[2]]),
+                         # lower = map_dbl(ranges, ~.[[1]]+0.01*diff(.)),
+                         # upper = map_dbl(ranges, ~.[[2]]-0.01*diff(.)),
                          method = "L-BFGS-B", control = list(trace = FALSE))
     this_val <- optimised$value
     this_pt <- data.frame(matrix(optimised$par, nrow = 1)) |> setNames(names(ranges))
@@ -379,7 +387,7 @@ point_design <- function(data, b_em, v_em, reps, ranges, testgrid, pt_max,
       p_scores <- c(p_scores, pt_suggest$val)
     }
     data <- rbind.data.frame(data, pt_suggest$point)
-    reps <- c(reps, Inf)
+    reps <- c(reps, nrepsadd)
     counter <- counter + 1
   }
   pts_with_reps <- cbind.data.frame(data, reps) |> setNames(c(names(data), "reps"))

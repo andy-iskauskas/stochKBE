@@ -6,7 +6,7 @@ source("baseFunctions.R")
 source("plotting.R")
 library(lhs)
 library(tidyr)
-set.seed(2)
+set.seed(1)
 
 ## Model set-up for Gillespie algorithm
 Num <- 1000
@@ -86,19 +86,9 @@ wave0_output <- data.frame(wave0_results |> dplyr::group_by(across(all_of(names(
 
 ## Make the emulators
 ems_wave1 <- create_boundary_ems(wave0_results, out_name, ranges, reps,
-                                 SIR_functions, bb_data, N, c(0), c(1), out_index, t_point)
+                                 SIR_functions, bb_data, N, c(0), c(1), out_index, t_point,
+                                 thetas = NULL)
 this_var_em <- ems_wave1$boundary_bulk$variance
-
-## Testing the IMSPE Stuff
-base_em <- ems_wave1$no_boundary$expectation$I$o_em
-bound_em <- ems_wave1$boundary$expectation
-new_point <- data.frame(matrix(purrr::map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), nrow = 1)) |>
-  setNames(names(ranges))
-starting_inverse1 <- chol2inv(chol(bound_em$get_cov(training_points, full = TRUE) + diag(this_var_em$get_exp(training_points)/10)))
-test1 <- imspe(small_test_grid, bound_em, this_var_em, training_points, rep(10, 20),
-               starting_inverse1, new_point, new_method = TRUE)
-test2 <- imspe2(small_test_grid, base_em, training_points,
-                new_point, starting_inverse1, 1, 0)
 
 ## Create a 20x20 grid of points to evaluate mean emulator variance on
 small_test_grid <- expand.grid(beta = seq(0, 1.5, length.out = 40), gamma = seq(0, 0.5, length.out = 40))
@@ -106,12 +96,13 @@ small_test_grid <- expand.grid(beta = seq(0, 1.5, length.out = 40), gamma = seq(
 cl <- makeCluster(8); setDefaultCluster(cl = cl)
 clusterEvalQ(cl, library(dplyr))
 clusterEvalQ(cl, library(hmer))
-clusterExport(cl, c("imspe", "part_inv", "small_test_grid", "R1", "r1"))
-new_design_test <- point_design(training_points, ems_wave1$no_boundary$expectation$I$o_em, ems_wave1$boundary_bulk$variance,
-                                rep(10, 20), ranges, small_test_grid, 40, verbose = TRUE, return_scores = TRUE,
-                                in_par = FALSE, boundary_col = 1, boundary_val = 0)
+clusterExport(cl, c("imspe2", "part_inv", "R1", "r1"))
+new_design_test <- point_design(training_points, ems_wave1$no_boundary$expectation$I$o_em, this_var_em,
+                                rep(10, 20), ranges, 30^2, 40, verbose = TRUE, return_scores = TRUE,
+                                in_par = TRUE, boundary_col = 1, boundary_val = 0)
 plot(x = new_design_test$points$beta, y = new_design_test$points$gamma, pch = 16, col = rep(c("grey", "black"), each = 20))
 
+new_design_test$points$reps <- rep(c(10, 0), each = 20)
 design_with_reps <- rep_allocate(new_design_test$points, ems_wave1$boundary_bulk$variance, 400, 2)
 
 ## Create design for next wave of emulation
@@ -220,6 +211,18 @@ ggplot(data = subset(exp_df_reshape, name == "Vboth"), aes(x = beta, y = gamma))
   geom_point(data = design_with_reps, col = rep(c("grey40", "white"), each = 20), size = rep(c(0.8, 1), each = 20)) +
   geom_text(data = design_with_reps, aes(label = reps),
             y = sapply(design_with_reps$gamma, get_loc),
+            col = rep(c("grey40", "white"), each = 20), size = rep(c(3, 4), each = 20)) +
+  theme_minimal() +
+  scale_x_continuous(expand = c(0,0.01)) +
+  scale_y_continuous(expand = c(0.01,0)) +
+  labs(x = TeX("$\\beta$"), y = TeX("$\\gamma$"))
+ggplot(data = subset(exp_df_reshape, name == "Vboth"), aes(x = beta, y = gamma)) +
+  geom_raster(aes(fill = value), interpolate = TRUE) +
+  scale_fill_gradientn(name = "Var", colours = viridis::viridis(17, option = "A"),
+                       values = c(0, 0.00625, 0.0125, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1)) +
+  geom_point(data = new_design$points, col = rep(c("grey40", "white"), each = 20), size = rep(c(0.8, 1), each = 20)) +
+  geom_text(data = new_design$points, aes(label = reps),
+            y = sapply(new_design$points$gamma, get_loc),
             col = rep(c("grey40", "white"), each = 20), size = rep(c(3, 4), each = 20)) +
   theme_minimal() +
   scale_x_continuous(expand = c(0,0.01)) +
