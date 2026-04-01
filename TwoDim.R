@@ -90,23 +90,40 @@ ems_wave1 <- create_boundary_ems(wave0_results, out_name, ranges, reps,
                                  thetas = NULL)
 this_var_em <- ems_wave1$boundary_bulk$variance
 
-## Create a 20x20 grid of points to evaluate mean emulator variance on
-small_test_grid <- expand.grid(beta = seq(0, 1.5, length.out = 40), gamma = seq(0, 0.5, length.out = 40))
+# ### Checking the two different methods of getting IMSPE: mean_em_var and imspe2
+# t_new_point <- data.frame(matrix(purrr::map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), nrow = 1)) |>
+#   setNames(names(ranges))
+# t_new_points <- do.call('cbind.data.frame', purrr::map(ranges, ~runif(20, .[[1]], .[[2]]))) |>
+#   setNames(names(ranges))
+# bem <- ems_wave1$no_boundary$expectation$I$o_em
+# matbase <- R1(training_points, training_points, bem, 0, 1) * bem$get_cov(dplyr::mutate(training_points, across(all_of(1), ~0))) +
+#   diag(c(20/this_var_em$get_exp(training_points)))
+# imat <- MASS::ginv(matbase)
+# 
+# mean_em_var(small_test_grid, bem, this_var_em, training_points, c(rep(10, 20), Inf), 1, 0, imat, t_new_point, new_method = TRUE)
+# imspe2(small_test_grid, bem, training_points, t_new_point, imat, 1, 0)
+# 
+# old_vals <- purrr::map_dbl(seq_len(nrow(t_new_points)), function(i) {
+#   mean_em_var(small_test_grid, bem, this_var_em, training_points, c(rep(10, 20), Inf), 1, 0, imat, t_new_points[i,,drop=FALSE], new_method = TRUE)
+# })
+# new_vals <- purrr::map_dbl(seq_len(nrow(t_new_points)), function(i) {
+#   imspe2(small_test_grid, bem, training_points, t_new_points[i,,drop=FALSE], imat, 1, 0)
+# })
 
 cl <- makeCluster(8); setDefaultCluster(cl = cl)
 clusterEvalQ(cl, library(dplyr))
 clusterEvalQ(cl, library(hmer))
 clusterExport(cl, c("imspe2", "part_inv", "R1", "r1"))
 new_design_test <- point_design(training_points, ems_wave1$no_boundary$expectation$I$o_em, this_var_em,
-                                rep(10, 20), ranges, 30^2, 40, verbose = TRUE, return_scores = TRUE,
-                                in_par = TRUE, boundary_col = 1, boundary_val = 0)
+                                rep(10, 20), ranges, 40^2, 40, verbose = TRUE, return_scores = TRUE,
+                                in_par = TRUE, boundary_col = 1, boundary_val = 0, nrepsadd = 2)
 plot(x = new_design_test$points$beta, y = new_design_test$points$gamma, pch = 16, col = rep(c("grey", "black"), each = 20))
-
-new_design_test$points$reps <- rep(c(10, 0), each = 20)
+new_design_test$points$reps[new_design_test$points$reps == 2] <- Inf
 design_with_reps <- rep_allocate(new_design_test$points, ems_wave1$boundary_bulk$variance, 400, 2)
 
 ## Create design for next wave of emulation
 ## Next 4 lines relevant if optimParallel is installed
+small_test_grid <- expand.grid(beta = seq(0, 1.5, length.out = 40), gamma = seq(0, 0.5, length.out = 40))
 cl <- makeCluster(8); setDefaultCluster(cl = cl)
 clusterEvalQ(cl, library(dplyr))
 clusterEvalQ(cl, library(hmer))
@@ -215,7 +232,7 @@ ggplot(data = subset(exp_df_reshape, name == "Vboth"), aes(x = beta, y = gamma))
   theme_minimal() +
   scale_x_continuous(expand = c(0,0.01)) +
   scale_y_continuous(expand = c(0.01,0)) +
-  labs(x = TeX("$\\beta$"), y = TeX("$\\gamma$"))
+  labs(title = "New method", x = TeX("$\\beta$"), y = TeX("$\\gamma$"))
 ggplot(data = subset(exp_df_reshape, name == "Vboth"), aes(x = beta, y = gamma)) +
   geom_raster(aes(fill = value), interpolate = TRUE) +
   scale_fill_gradientn(name = "Var", colours = viridis::viridis(17, option = "A"),
@@ -227,7 +244,7 @@ ggplot(data = subset(exp_df_reshape, name == "Vboth"), aes(x = beta, y = gamma))
   theme_minimal() +
   scale_x_continuous(expand = c(0,0.01)) +
   scale_y_continuous(expand = c(0.01,0)) +
-  labs(x = TeX("$\\beta$"), y = TeX("$\\gamma$"))
+  labs(title = "Gramacy method", x = TeX("$\\beta$"), y = TeX("$\\gamma$"))
   
 
 ### Training new emulator and comparing to other proposal methods
@@ -240,16 +257,27 @@ old_vars <- ems_wave1$boundary_bulk$expectation$get_cov(big_grid)
 old_vars[old_vars < 0] <- 1e-6
 
 # Setup for the new design
-wave1_results <- do.call('rbind.data.frame', purrr::map(seq_len(nrow(new_design$points)), function(i) {
+wave1_resultsa <- do.call('rbind.data.frame', purrr::map(seq_len(nrow(new_design$points)), function(i) {
   if (i <= 20 && new_design$points[i,3] == 10) return(NULL)
   get_results(unlist(new_design$points[i, 1:2], use.names = FALSE), N, nreps = ifelse(i <= 20, new_design$points[i,3]-10, new_design$points[i,3]),
               outs = c(out_name), times = 15)
 })) |> setNames(c(names(ranges), out_name))
-wave1_all <- rbind.data.frame(wave0_results, wave1_results)
-wave1_output <- data.frame(wave1_all |> dplyr::group_by(across(all_of(names(ranges)))) |>
+wave1_alla <- rbind.data.frame(wave0_results, wave1_resultsa)
+wave1_outputa <- data.frame(wave1_alla |> dplyr::group_by(across(all_of(names(ranges)))) |>
                              dplyr::summarise(exp = mean(.data[[out_name]]), var = var(.data[[out_name]]), reps = length(.data[[out_name]])))
-new_ems <- create_boundary_ems(wave1_all, out_name, ranges, new_design$points$reps,
+new_emsa <- create_boundary_ems(wave1_alla, out_name, ranges, new_design$points$reps,
                                SIR_functions, bb_data, N, 0, c(1), out_index, t_point)
+
+wave1_resultsb <- do.call('rbind.data.frame', purrr::map(seq_len(nrow(design_with_reps)), function(i) {
+  if (i <= 20 && design_with_reps[i,3] == 10) return(NULL)
+  get_results(unlist(design_with_reps[i,1:2], use.names = FALSE), N, nreps = ifelse(i <= 20, design_with_reps[i,3]-10, design_with_reps[i,3]),
+              outs = c(out_name), times = 15)
+})) |> setNames(c(names(ranges), out_name))
+wave1_allb <- rbind.data.frame(wave0_results, wave1_resultsb)
+wave1_outputb <- data.frame(wave1_allb |> dplyr::group_by(across(all_of(names(ranges)))) |>
+                              dplyr::summarise(exp = mean(.data[[out_name]]), var = var(.data[[out_name]]), reps = length(.data[[out_name]])))
+new_emsb <- create_boundary_ems(wave1_allb, out_name, ranges, design_with_reps$reps,
+                                            SIR_functions, bb_data, N, 0, c(1), out_index, t_point)
 
 # Setup for the basic design
 basic_lhs <- lhs::augmentLHS(
@@ -268,20 +296,44 @@ basic_ems <- create_boundary_ems(all_points_basic, out_name, ranges, rep(10, 40)
                                  SIR_functions, bb_data, N, 0, c(1), out_index, t_point)
 
 # Setup for the new design with uniform reps
-unif_rep_res <- do.call("rbind.data.frame", purrr::map(seq_len(nrow(new_design$points)), function(i) {
+unif_rep_resa <- do.call("rbind.data.frame", purrr::map(seq_len(nrow(new_design$points)), function(i) {
   get_results(unlist(new_design$points[i,1:2], use.names = FALSE), N, nreps = 10, outs = c(out_name), times = 15)
 })) |> setNames(c(names(ranges), out_name))
-unif_rep_ems <- create_boundary_ems(unif_rep_res, out_name, ranges, rep(10, 40),
+unif_rep_emsa <- create_boundary_ems(unif_rep_resa, out_name, ranges, rep(10, 40),
+                                    SIR_functions, bb_data, N, 0, c(1), out_index, t_point)
+unif_rep_resb <- do.call("rbind.data.frame", purrr::map(seq_len(nrow(design_with_reps)), function(i) {
+  get_results(unlist(design_with_reps[i,1:2], use.names = FALSE), N, nreps = 10, outs = c(out_name), times = 15)
+})) |> setNames(c(names(ranges), out_name))
+unif_rep_emsb <- create_boundary_ems(unif_rep_resb, out_name, ranges, rep(10, 40),
                                     SIR_functions, bb_data, N, 0, c(1), out_index, t_point)
 
-
 ## Comparing predictive variance across the space
-new_vars <- new_ems$boundary_bulk$expectation$get_cov(big_grid)
-new_vars[new_vars < 0] <- 1e-6
+new_varsa <- new_emsa$boundary_bulk$expectation$get_cov(big_grid)
+new_varsa[new_varsa < 0] <- 1e-6
+new_varsb <- new_emsb$boundary_bulk$expectation$get_cov(big_grid)
+new_varsb[new_varsb < 0] <- 1e-6
 basic_vars <- basic_ems$boundary_bulk$expectation$get_cov(big_grid)
 basic_vars[basic_vars < 0] <- 1e-6
-unif_rep_vars <- unif_rep_ems$boundary_bulk$expectation$get_cov(big_grid)
-unif_rep_vars[unif_rep_vars < 0] <- 1e-6
+unif_rep_varsa <- unif_rep_emsa$boundary_bulk$expectation$get_cov(big_grid)
+unif_rep_varsa[unif_rep_varsa < 0] <- 1e-6
+unif_rep_varsb <- unif_rep_emsb$boundary_bulk$expectation$get_cov(big_grid)
+unif_rep_varsb[unif_rep_varsa < 0] <- 1e-6
+
+all_var_df <- cbind.data.frame(cbind.data.frame(big_grid, new_varsa, new_varsb, unif_rep_varsa, unif_rep_varsb)) |>
+  setNames(c('beta', 'gamma', 'Old', 'New', 'Uniform', 'Naive'))
+comparison_plot(all_var_df, c("Old", "Uniform", "New", "Naive"), c("beta", "gamma"), "Variance", 
+                breaks = c(0, 10, 50, 100, 200, 500, 1000, 10000, 100000),
+                labels = c(
+                  TeX(r"($\[0, 10)$)"), TeX(r"($\[10, 50)$)"),
+                  TeX(r"($\[50, 100)$)"), TeX(r"($\[100, 200)$)"),
+                  TeX(r"($\[200, 500)$)"), TeX(r"($\[500, 10^4)$)"),
+                  TeX(r"($\[10^4, 10^5)$)"), TeX(r"($\[10^5, 10^6)$)")
+                ),
+                viridoption = "C") +
+  theme_minimal() +
+  scale_x_continuous(expand = c(0.01,0.01)) +
+  scale_y_continuous(expand = c(0.01,0.01))
+
 
 ## Plotting the results: used here are the three emulator sets trained above with
 # the different proposals, as well as the original wave 1 stoch KBE emulators

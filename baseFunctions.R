@@ -344,14 +344,16 @@ point_design <- function(data, b_em, v_em, reps, ranges, testgrid_pts, pt_max,
                          verbose = FALSE, return_scores = FALSE, in_par = FALSE) {
   if (return_scores)
     p_scores <- c()
+  tlhs <- lhs::randomLHS(testgrid_pts, length(ranges))
+  testgrid <- data.frame(t(apply(tlhs, 1, function(x) {
+    x * purrr::map_dbl(ranges, diff) + purrr::map_dbl(ranges, ~.[[1]])
+  }))) |> setNames(names(ranges))
   find_next_point <- function(data, b_em, v_em, reps, ranges) {
-    tlhs <- lhs::randomLHS(testgrid_pts, length(ranges))
-    testgrid <- data.frame(t(apply(tlhs, 1, function(x) {
-      x * purrr::map_dbl(ranges, diff) + purrr::map_dbl(ranges, ~.[[1]])
-    }))) |> setNames(names(ranges))
     datamutate <- (data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
+    v_em_vals <- v_em$get_exp(data)
+    v_em_vals[v_em_vals < 0] <- 1e-6
     start_mat <- R1(data, data, b_em, boundary_val, boundary_col) * b_em$get_cov(datamutate, full = TRUE) +
-      diag(1/v_em$get_exp(data) * reps)
+      diag(c(v_em_vals/reps))
     start_inv <- tryCatch(chol2inv(chol(start_mat)), error = function(e) MASS::ginv(start_mat))
     opt_func <- function(x) {
       x_mod <- data.frame(matrix(x, nrow = 1)) |> setNames(names(ranges))
