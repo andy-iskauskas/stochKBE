@@ -179,17 +179,6 @@ create_boundary_ems <- function(data_raw, out_name, ranges, reps,
   )
 }
 
-## Warping functions
-## g^-1(x)
-# This assumes an exponential squared, separable correlation structure
-integ <- function(y, theta, xmin) {
-  y - xmin + sqrt(pi/2) * theta * (pnorm(2*xmin/theta) - pnorm(2*y/theta))
-}
-## Inverter for g^-1(x)
-inverse = function (f, lower = -5, upper = 10, xmin, xmax, theta) {
-  function (y) uniroot((function (x) integ(x, theta, xmin) - y), lower = lower, upper = upper)[[1]]
-}
-
 ## Scoring functions for variance reduction
 # Calculate the mean emulator variance across the space, using a representative
 # collection of points.
@@ -376,11 +365,17 @@ point_design <- function(data, b_em, v_em, reps, ranges, testgrid_pts, pt_max,
                          method = "L-BFGS-B", control = list(trace = FALSE))
     this_val <- optimised$value
     this_pt <- data.frame(matrix(optimised$par, nrow = 1)) |> setNames(names(ranges))
+    dists <- apply(data, 1, function(x) {
+      sum((x-this_pt)^2)
+    })
+    if (this_val < 0) this_val <- Inf
+    if (any(dists < 1e-6)) this_val <- NaN
     return(list(val = this_val, point = this_pt))
   }
   counter <- 0
   while(nrow(data) < pt_max) {
     pt_suggest <- find_next_point(data, b_em, v_em, reps, ranges)
+    if (is.nan(pt_suggest$val)) next
     if (verbose) {
       print_str <- paste0("Proposal ", counter+1, ": Point score ", signif(pt_suggest$val, 4))
       print(print_str)
@@ -420,7 +415,7 @@ design_subselect <- function(data, pre_em, var_em, reps, ranges, testgrid,
     v_em_vals <- var_em$get_exp(data)
     v_em_vals[v_em_vals < 0] <- 1e-6
     start_inv <- R1(data, data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(datamutate, full = TRUE) +
-      diag(c(1/v_em_vals * reps))
+      diag(c(v_em_vals/reps))
     start <- tryCatch(
       chol2inv(chol(start_inv)),
       error = function(e) MASS::ginv(start_inv)

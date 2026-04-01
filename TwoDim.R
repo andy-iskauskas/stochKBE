@@ -90,35 +90,14 @@ ems_wave1 <- create_boundary_ems(wave0_results, out_name, ranges, reps,
                                  thetas = NULL)
 this_var_em <- ems_wave1$boundary_bulk$variance
 
-# ### Checking the two different methods of getting IMSPE: mean_em_var and imspe2
-# t_new_point <- data.frame(matrix(purrr::map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), nrow = 1)) |>
-#   setNames(names(ranges))
-# t_new_points <- do.call('cbind.data.frame', purrr::map(ranges, ~runif(20, .[[1]], .[[2]]))) |>
-#   setNames(names(ranges))
-# bem <- ems_wave1$no_boundary$expectation$I$o_em
-# matbase <- R1(training_points, training_points, bem, 0, 1) * bem$get_cov(dplyr::mutate(training_points, across(all_of(1), ~0))) +
-#   diag(c(20/this_var_em$get_exp(training_points)))
-# imat <- MASS::ginv(matbase)
-# 
-# mean_em_var(small_test_grid, bem, this_var_em, training_points, c(rep(10, 20), Inf), 1, 0, imat, t_new_point, new_method = TRUE)
-# imspe2(small_test_grid, bem, training_points, t_new_point, imat, 1, 0)
-# 
-# old_vals <- purrr::map_dbl(seq_len(nrow(t_new_points)), function(i) {
-#   mean_em_var(small_test_grid, bem, this_var_em, training_points, c(rep(10, 20), Inf), 1, 0, imat, t_new_points[i,,drop=FALSE], new_method = TRUE)
-# })
-# new_vals <- purrr::map_dbl(seq_len(nrow(t_new_points)), function(i) {
-#   imspe2(small_test_grid, bem, training_points, t_new_points[i,,drop=FALSE], imat, 1, 0)
-# })
-
 cl <- makeCluster(8); setDefaultCluster(cl = cl)
 clusterEvalQ(cl, library(dplyr))
 clusterEvalQ(cl, library(hmer))
 clusterExport(cl, c("imspe2", "part_inv", "R1", "r1"))
 new_design_test <- point_design(training_points, ems_wave1$no_boundary$expectation$I$o_em, this_var_em,
                                 rep(10, 20), ranges, 40^2, 40, verbose = TRUE, return_scores = TRUE,
-                                in_par = TRUE, boundary_col = 1, boundary_val = 0, nrepsadd = 2)
+                                in_par = TRUE, boundary_col = 1, boundary_val = 0, nrepsadd = Inf)
 plot(x = new_design_test$points$beta, y = new_design_test$points$gamma, pch = 16, col = rep(c("grey", "black"), each = 20))
-new_design_test$points$reps[new_design_test$points$reps == 2] <- Inf
 design_with_reps <- rep_allocate(new_design_test$points, ems_wave1$boundary_bulk$variance, 400, 2)
 
 ## Create design for next wave of emulation
@@ -246,6 +225,7 @@ ggplot(data = subset(exp_df_reshape, name == "Vboth"), aes(x = beta, y = gamma))
   scale_y_continuous(expand = c(0.01,0)) +
   labs(title = "Gramacy method", x = TeX("$\\beta$"), y = TeX("$\\gamma$"))
   
+
 
 ### Training new emulator and comparing to other proposal methods
 # Three methods of point proposal are considered: one using the improved design with
