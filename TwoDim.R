@@ -1,18 +1,23 @@
-###############################
-# Emulation of SIR Model - 2d #
-###############################
+##################################
+# 2d SIR model with one boundary #
+##################################
+
+## Source functions and load libraries
 source("modelFunctions.R")
 source("baseFunctions.R")
 source("plotting.R")
-library(lhs)
-library(tidyr)
+require(lhs)
+require(tidyr)
+# Set seed for reproducibility
 set.seed(1)
 
-## Model set-up for Gillespie algorithm
-Num <- 1000
+## Gillespie algorithm set-up
+# The model is an SIRS model with fixed waning-immunity rate, making it
+# functionally a 2-dimensional problem (but with interesting dynamics). The
+# boundary is at beta = 0.
 N <- list()
 N$M <- c(S = 750, I = 250, R = 0)
-
+Num <- sum(N$M)
 N$Pre <- matrix(c(1, 0, 0, 0, 1, 0, 0, 0, 1), nrow = 3, byrow = TRUE)
 N$Post <- matrix(c(0, 1, 0, 0, 0, 1, 1, 0, 0), nrow = 3, byrow = TRUE)
 N$h <- function(x, t, th = rep(1, 2)) {
@@ -24,13 +29,13 @@ N$h <- function(x, t, th = rep(1, 2)) {
   )
 }
 
-## Generating bulk results: 20 points, 10 reps each
-reps = 10
-## Focusing on number of infected at time t=15
-out_name = "I"
-out_index = 2
-t_point = 15
-## Ranges for the three parameters
+## Generate results: 20 points, each with 10 realisations
+# Focus on the I compartment (output 2) at time t=15
+reps <- 10
+out_name <- "I"
+out_index <- 2
+t_point <- 15
+# Define ranges and generate a LHD over the points
 ranges <- list(beta = c(0, 1.5), gamma = c(0, 0.5))
 training_points <- data.frame(t(apply(
   lhs::optimumLHS(10*length(ranges), length(ranges)),
@@ -38,95 +43,33 @@ training_points <- data.frame(t(apply(
     x * purrr::map_dbl(ranges, diff) + purrr::map_dbl(ranges, ~.[[1]])
   }
 ))) |> setNames(names(ranges))
-## Sample Plot
-test_runs <- map(seq_len(nrow(training_points)), function(i) {
-  get_results(as.numeric(training_points[i,]), N, 10, outs = c(out_name), times = 30, raw = TRUE)
-})
 
-run_sample <- sample(length(test_runs), 8)
-## Infected
-plot(1:10, 1:10, xlim = c(0, 30), ylim = c(0, 1000), type = 'n',
-     main = "SIRS Model: Infected",
-     xlab = "Time", ylab = "Number of Infected")
-for (i in seq_along(run_sample)) {
-  these_runs <- test_runs[[run_sample[i]]]
-  for (j in seq_len(dim(these_runs)[3])) {
-    lines(x = 0:30, y = these_runs[,,j][,2], col = i)
-  }
-}
-abline(v = 15, lty = 2, col = "black")
-## Recovered
-plot(1:10, 1:10, xlim = c(0, 30), ylim = c(0, 1000), type = 'n',
-     main = "SIRS Model: Recovered",
-     xlab = "Time", ylab = "Number of Recovered")
-for (i in seq_along(run_sample)) {
-  these_runs <- test_runs[[run_sample[i]]]
-  for (j in seq_len(dim(these_runs)[3])) {
-    lines(x = 0:30, y = these_runs[,,j][,3], col = i)
-  }
-}
-abline(v = 15, lty = 2, col = "black")
-## Susceptible
-plot(1:10, 1:10, xlim = c(0, 30), ylim = c(0, 1000), type = 'n',
-     main = "SIRS Model: Susceptible",
-     xlab = "Time", ylab = "Number of Susceptible")
-for (i in seq_along(run_sample)) {
-  these_runs <- test_runs[[run_sample[i]]]
-  for (j in seq_len(dim(these_runs)[3])) {
-    lines(x = 0:30, y = these_runs[,,j][,1], col = i)
-  }
-}
-abline(v = 15, lty = 2, col = "black")
-
+## Get results
 wave0_results <- do.call('rbind.data.frame', purrr::map(seq_len(nrow(training_points)), function(i) {
   get_results(unlist(training_points[i,], use.names = FALSE), N, nreps = reps, outs = c(out_name), times = 15)
 })) |> setNames(c(names(ranges), out_name))
 wave0_output <- data.frame(wave0_results |> dplyr::group_by(across(all_of(names(ranges)))) |>
                              dplyr::summarise(exp = mean(.data[[out_name]]), var = var(.data[[out_name]])))
 
-## Make the emulators
+## Construct the emulators using `create_boundary_ems()`
+# Explicitly create a variable for the base emulator and variance emulator for later
 ems_wave1 <- create_boundary_ems(wave0_results, out_name, ranges, reps,
                                  SIR_functions, bb_data, N, c(0), c(1), out_index, t_point,
                                  thetas = NULL)
+this_base_em <- ems_wave1$no_boundary$expectation$I$o_em
 this_var_em <- ems_wave1$boundary_bulk$variance
 
-cl <- makeCluster(8); setDefaultCluster(cl = cl)
-clusterEvalQ(cl, library(dplyr))
-clusterEvalQ(cl, library(hmer))
-clusterExport(cl, c("imspe2", "part_inv", "R1", "r1"))
-new_design_test <- point_design(training_points, ems_wave1$no_boundary$expectation$I$o_em, this_var_em,
-                                rep(10, 20), ranges, 40^2, 40, verbose = TRUE, return_scores = TRUE,
-                                in_par = TRUE, boundary_col = 1, boundary_val = 0, nrepsadd = Inf)
-plot(x = new_design_test$points$beta, y = new_design_test$points$gamma, pch = 16, col = rep(c("grey", "black"), each = 20))
-design_with_reps <- rep_allocate(new_design_test$points, ems_wave1$boundary_bulk$variance, 400, 2)
-
-## Create design for next wave of emulation
-## Next 4 lines relevant if optimParallel is installed
-small_test_grid <- expand.grid(beta = seq(0, 1.5, length.out = 40), gamma = seq(0, 0.5, length.out = 40))
-cl <- makeCluster(8); setDefaultCluster(cl = cl)
-clusterEvalQ(cl, library(dplyr))
-clusterEvalQ(cl, library(hmer))
-clusterExport(cl, c("new_point_score", "mean_em_var", "r1", "R1", "part_inv"))
-## Next line relevant if future is installed
-plan(multisession, workers = 8)
-new_design <- design_subselect(training_points,
-                          ems_wave1$no_boundary$expectation$I$o_em, this_var_em,
-                          rep(10, 20), ranges, small_test_grid, rep_max = 400, pt_max = 40,
-                          store_order = TRUE, verbose = TRUE, return_scores = TRUE, ntoadd = 2)
-
-## Plotting results
-plot(x = seq_along(new_design$rep_scores), y = new_design$rep_scores, type = 'l',
-     main = "Predictive Variance", xlab = "Proposal", ylab = "Variance",
-     ylim = c(0, max(new_design$rep_scores)))
-lines(x = seq_along(new_design$pt_scores[!is.infinite(new_design$pt_scores)]), y = new_design$pt_scores[!is.infinite(new_design$pt_scores)], col = 'blue')
-legend("topright", inset = 0.05, legend = c("New Point", "Extra Rep"),
-       lty = 1, col = c("blue", "black"))
-
+## Create a 'big' grid to evaluate results on
 bgn <- 50
 big_grid <- expand.grid(
   beta = seq(ranges$beta[[1]], ranges$beta[[2]], length.out = bgn),
   gamma = seq(ranges$gamma[[1]], ranges$gamma[[2]], length.out = bgn)
 )
+# For the trained emulators, want to compare the results from the base (untrained)
+# emulators, the emulators that only have access to boundary information, those 
+# with only 'bulk' knowledge, and those which have both boundary and bulk info.
+# Create data.frames with all of this information for both the expectation and
+# variance emulators, reshaping for the purpose of plotting.
 exp_df <- cbind.data.frame(
   big_grid,
   data.frame(
@@ -141,6 +84,24 @@ exp_df <- cbind.data.frame(
   )
 )
 exp_df_reshape <- tidyr::pivot_longer(exp_df, cols = !c(beta, gamma))
+var_df <- cbind.data.frame(
+  big_grid,
+  data.frame(
+    Ebulk = ems_wave1$no_boundary$variance[[out_name]]$get_exp(big_grid, check_neg = FALSE),
+    Vbulk = ems_wave1$no_boundary$variance[[out_name]]$get_cov(big_grid),
+    Ebound = ems_wave1$boundary$variance$get_exp(big_grid),
+    Vbound = ems_wave1$boundary$variance$get_cov(big_grid),
+    Eboth = ems_wave1$boundary_bulk$variance$get_exp(big_grid),
+    Vboth = ems_wave1$boundary_bulk$variance$get_cov(big_grid),
+    Eno = ems_wave1$no_boundary$variance[[out_name]]$o_em$get_exp(big_grid),
+    Vno = ems_wave1$no_boundary$variance[[out_name]]$o_em$get_cov(big_grid)
+  )
+)
+var_df_reshape <- tidyr::pivot_longer(var_df, cols = !c(1:2))
+## Plot the results. Colour scale breaks have been chosen by-hand.
+## Order of plotting is:
+# Mean emulator: expectation then variance
+# Variance emulator: expectation then variance
 grid_plot(exp_df_reshape, "E", c("beta", "gamma"), "Mean", wave0_output, viridoption = "D",
           breaks = c(-250, 0, 100, 200, 300, 500, 750, 1000, 1200),
           labels = c("(-250, 0]", "[0, 100)", "[100, 200)", "[200, 300)",
@@ -159,21 +120,6 @@ grid_plot(exp_df_reshape, "V", c("beta", "gamma"), "Mean", wave0_output, viridop
   theme_minimal() +
   scale_x_continuous(expand = c(0.01,0.01)) +
   scale_y_continuous(expand = c(0.01,0.01))
-
-var_df <- cbind.data.frame(
-  big_grid,
-  data.frame(
-    Ebulk = ems_wave1$no_boundary$variance[[out_name]]$get_exp(big_grid, check_neg = FALSE),
-    Vbulk = ems_wave1$no_boundary$variance[[out_name]]$get_cov(big_grid),
-    Ebound = ems_wave1$boundary$variance$get_exp(big_grid),
-    Vbound = ems_wave1$boundary$variance$get_cov(big_grid),
-    Eboth = ems_wave1$boundary_bulk$variance$get_exp(big_grid),
-    Vboth = ems_wave1$boundary_bulk$variance$get_cov(big_grid),
-    Eno = ems_wave1$no_boundary$variance[[out_name]]$o_em$get_exp(big_grid),
-    Vno = ems_wave1$no_boundary$variance[[out_name]]$o_em$get_cov(big_grid)
-  )
-)
-var_df_reshape <- tidyr::pivot_longer(var_df, cols = !c(1:2))
 grid_plot(var_df_reshape, "E", c("beta", "gamma"), "Variance", wave0_output,
           viridoption = "D",
           breaks = c(-200, 0, 5, 10, 50, 100, 500, 1000, 2000, 5000)) +
@@ -195,71 +141,125 @@ grid_plot(var_df_reshape, "V", c("beta", "gamma"), "Variance", wave0_output,
   scale_x_continuous(expand = c(0.01,0.01)) +
   scale_y_continuous(expand = c(0.01,0.01))
 
-## Plotting the result of the proposal
+# New Proposal
+## Set up the parallelisation, and propose a new design of 20 points with another
+# 200 reps to be shared around.
+cl <- makeCluster(8); setDefaultCluster(cl = cl)
+clusterEvalQ(cl, library(dplyr))
+clusterEvalQ(cl, library(hmer))
+clusterExport(cl, c("imspe", "part_inv", "R1", "r1"))
+## We assume two repetitions will be placed per design point initially...
+new_design <- point_design(training_points, this_base_em, this_var_em,
+                           rep(10, 20), ranges, 40^2, 40, verbose = TRUE, return_scores = TRUE,
+                           in_par = TRUE, boundary_col = 1, boundary_val = 0, nrepsadd = 2)
+## ...then we allocate the full complement of reps.
+new_design_with_reps <- rep_allocate(new_design$points, this_var_em, 400, 2)
+
+## Plotting the proposal result
+### A quick-and-dirty function to ensure that annotated repetition numbers don't
+# exceed the bounds of the plot
 get_loc <- function(y) {
   if (y > 0.48) return(y-0.012)
   else return(y+0.012)
 }
+## Plot the results: old design points are smaller and in grey. Background is the
+# original emulator variance across the space (derived from exp_df above)
 ggplot(data = subset(exp_df_reshape, name == "Vboth"), aes(x = beta, y = gamma)) +
   geom_raster(aes(fill = value), interpolate = TRUE) +
   scale_fill_gradientn(name = "Var", colours = viridis::viridis(17, option = "A"),
                        values = c(0, 0.00625, 0.0125, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1)) +
-  geom_point(data = design_with_reps, col = rep(c("grey40", "white"), each = 20), size = rep(c(0.8, 1), each = 20)) +
-  geom_text(data = design_with_reps, aes(label = reps),
-            y = sapply(design_with_reps$gamma, get_loc),
+  geom_point(data = new_design_with_reps, col = rep(c("grey40", "white"), each = 20), size = rep(c(0.8, 1), each = 20)) +
+  geom_text(data = new_design_with_reps, aes(label = reps),
+            y = sapply(new_design_with_reps$gamma, get_loc),
             col = rep(c("grey40", "white"), each = 20), size = rep(c(3, 4), each = 20)) +
   theme_minimal() +
   scale_x_continuous(expand = c(0,0.01)) +
   scale_y_continuous(expand = c(0.01,0)) +
-  labs(title = "New method", x = TeX("$\\beta$"), y = TeX("$\\gamma$"))
-ggplot(data = subset(exp_df_reshape, name == "Vboth"), aes(x = beta, y = gamma)) +
+  labs(title = "New Design", x = TeX("$\\beta$"), y = TeX("$\\gamma$"))
+## We can do the same with the predicted variance emulator expectation (aka stochasticity)
+# Useful for looking at where the reps have been placed
+ggplot(data = subset(var_df_reshape, name == "Eboth"), aes(x = beta, y = gamma)) +
   geom_raster(aes(fill = value), interpolate = TRUE) +
-  scale_fill_gradientn(name = "Var", colours = viridis::viridis(17, option = "A"),
+  scale_fill_gradientn(name = "Exp", colours = viridis::viridis(17, option = "B"),
                        values = c(0, 0.00625, 0.0125, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1)) +
-  geom_point(data = new_design$points, col = rep(c("grey40", "white"), each = 20), size = rep(c(0.8, 1), each = 20)) +
-  geom_text(data = new_design$points, aes(label = reps),
-            y = sapply(new_design$points$gamma, get_loc),
+  geom_point(data = new_design_with_reps, col = rep(c("grey40", "white"), each = 20), size = rep(c(0.8, 1), each = 20)) +
+  geom_text(data = new_design_with_reps, aes(label = reps),
+            y = sapply(new_design_with_reps$gamma, get_loc),
             col = rep(c("grey40", "white"), each = 20), size = rep(c(3, 4), each = 20)) +
   theme_minimal() +
   scale_x_continuous(expand = c(0,0.01)) +
   scale_y_continuous(expand = c(0.01,0)) +
-  labs(title = "Gramacy method", x = TeX("$\\beta$"), y = TeX("$\\gamma$"))
-  
+  labs(title = "New Design", x = TeX("$\\beta$"), y = TeX("$\\gamma$"))
 
+## Alternate plotting: show the updated emulator variance as each point is added.
+# For this, we need variance data.frames for each intermediate design
+design_dfs <- purrr::map(21:40, function(i) {
+  subset_data <- new_design$points[1:(i-1),1:2]
+  subset_data_mutate <- (subset_data |> dplyr::mutate(across(all_of(1), ~0)))
+  v_em_vals <- this_var_em$get_exp(subset_data)
+  v_em_vals[v_em_vals < 0] <- 1e-6
+  rps <- new_design$points$reps
+  start_mat <- R1(subset_data, subset_data, this_base_em, 0, 1) *
+    this_base_em$get_cov(subset_data_mutate, full = TRUE) +
+    diag(c(v_em_vals/rps[1:(i-1)]))
+  start_inv <- tryCatch(chol2inv(chol(start_mat)), error = function(e) MASS::ginv(start_mat))
+  x_mod <- new_design$points[i,1:2,drop=FALSE]
+  outpt <- imspe(big_grid, this_base_em,
+                  subset_data, x_mod, start_inv, return.raw = TRUE)
+  return(outpt)
+})
+orig_df <- exp_df[,c("beta", "gamma", "Vboth")] |> setNames(c("beta", "gamma", "V"))
+## Regularisation for (very small) negative values
+orig_df[orig_df$V < 0, "V"] <- 1e-6
+# A not necessarily nice combining of the initial data.frame and the new ones.
+all_dfs <- list(orig_df)
+for (i in 1:20) {
+  this_df <- design_dfs[[i]]
+  this_df[this_df$V < 0, "V"] <- 1e-6
+  all_dfs[[i+1]] <- this_df
+}
+## Create the plots: 21 in total
+gplots <- purrr::map(21:41, function(i) {
+  df <- all_dfs[[i-20]]
+  g <- ggplot(data = df, aes(x = beta, y = gamma)) +
+    geom_raster(aes(fill = V), interpolate = TRUE) +
+    scale_fill_gradientn(name = "Var", colours = viridis::viridis(17, option = "A"),
+                         values = c(0, 0.00625, 0.0125, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1),
+                         limits = c(0, 8000))
+  if (i == 21)
+    g <- g + geom_point(data = new_design_with_reps[1:(i-1),],
+                        col = rep(c('grey40', 'white'), times = c(20, i-21)),
+                        size = rep(c(0.8, 1), times = c(20, i-21))) +
+    geom_text(data = new_design_with_reps[1:(i-1),], aes(label = reps),
+              y = sapply(new_design_with_reps[1:(i-1),"gamma"], get_loc),
+              col = rep(c("grey40", "white"), times = c(20, i-21)),
+              size = rep(c(3,4), times = c(20, i-21)))
+  else
+    g <- g + geom_point(data = new_design_with_reps[1:(i-1),],
+                        col = rep(c('grey40', 'white', 'red'), times = c(20, i-22, 1)),
+                        size = rep(c(0.8, 1), times = c(20, i-21))) +
+    geom_text(data = new_design_with_reps[1:(i-1),], aes(label = reps),
+              y = sapply(new_design_with_reps[1:(i-1),"gamma"], get_loc),
+              col = rep(c("grey40", "white", 'red'), times = c(20, i-22, 1)),
+              size = rep(c(3,4), times = c(20, i-21)))
+  g <- g + theme_minimal() +
+    scale_x_continuous(expand = c(0,0.01)) +
+    scale_y_continuous(expand = c(0.01,0)) +
+    labs(title = paste("Emulator Variance after", i-21, "new points proposed"),
+         x = TeX("$\\beta$"), y = TeX("$\\gamma$"))
+})
+## Optional: save to a pdf
+# pdf(file = "../../StochPropPlot.pdf")
+# for (i in gplots) print(i)
+# dev.off()
 
-### Training new emulator and comparing to other proposal methods
-# Three methods of point proposal are considered: one using the improved design with
-# the corresponding suggested repetitions at each point (new_ems); one using a standard
-# Latin hypercube design with uniformly many repetitions at each point (basic_ems), and
-# one using the new design points but allocating equal numbers of repetitions to all
-# points (unif_rep_ems).
-old_vars <- ems_wave1$boundary_bulk$expectation$get_cov(big_grid)
-old_vars[old_vars < 0] <- 1e-6
-
-# Setup for the new design
-wave1_resultsa <- do.call('rbind.data.frame', purrr::map(seq_len(nrow(new_design$points)), function(i) {
-  if (i <= 20 && new_design$points[i,3] == 10) return(NULL)
-  get_results(unlist(new_design$points[i, 1:2], use.names = FALSE), N, nreps = ifelse(i <= 20, new_design$points[i,3]-10, new_design$points[i,3]),
-              outs = c(out_name), times = 15)
-})) |> setNames(c(names(ranges), out_name))
-wave1_alla <- rbind.data.frame(wave0_results, wave1_resultsa)
-wave1_outputa <- data.frame(wave1_alla |> dplyr::group_by(across(all_of(names(ranges)))) |>
-                             dplyr::summarise(exp = mean(.data[[out_name]]), var = var(.data[[out_name]]), reps = length(.data[[out_name]])))
-new_emsa <- create_boundary_ems(wave1_alla, out_name, ranges, new_design$points$reps,
-                               SIR_functions, bb_data, N, 0, c(1), out_index, t_point)
-
-wave1_resultsb <- do.call('rbind.data.frame', purrr::map(seq_len(nrow(design_with_reps)), function(i) {
-  if (i <= 20 && design_with_reps[i,3] == 10) return(NULL)
-  get_results(unlist(design_with_reps[i,1:2], use.names = FALSE), N, nreps = ifelse(i <= 20, design_with_reps[i,3]-10, design_with_reps[i,3]),
-              outs = c(out_name), times = 15)
-})) |> setNames(c(names(ranges), out_name))
-wave1_allb <- rbind.data.frame(wave0_results, wave1_resultsb)
-wave1_outputb <- data.frame(wave1_allb |> dplyr::group_by(across(all_of(names(ranges)))) |>
-                              dplyr::summarise(exp = mean(.data[[out_name]]), var = var(.data[[out_name]]), reps = length(.data[[out_name]])))
-new_emsb <- create_boundary_ems(wave1_allb, out_name, ranges, design_with_reps$reps,
-                                            SIR_functions, bb_data, N, 0, c(1), out_index, t_point)
-
-# Setup for the basic design
+### Comparison of different methods of design
+# We compare boundary emulators trained on different design methods:
+# 1) A 'naive', augmented LHD, design with equal reps/point
+# 2) The design above with equal reps/point
+# 3) The full new design with reps chosen according to `rep_allocate()`.
+## 1 - The basic design
+# Setup
 basic_lhs <- lhs::augmentLHS(
   t(apply(training_points, 1, function(x) {
     (x - purrr::map_dbl(ranges, ~.[[1]]))/purrr::map_dbl(ranges, diff)
@@ -274,33 +274,37 @@ basic_added <- do.call("rbind.data.frame", purrr::map(21:40, function(i) {
 all_points_basic <- rbind.data.frame(wave0_results, basic_added)
 basic_ems <- create_boundary_ems(all_points_basic, out_name, ranges, rep(10, 40),
                                  SIR_functions, bb_data, N, 0, c(1), out_index, t_point)
-
-# Setup for the new design with uniform reps
-unif_rep_resa <- do.call("rbind.data.frame", purrr::map(seq_len(nrow(new_design$points)), function(i) {
+## 2 - The new design with uniform reps
+# Setup
+unif_rep_res <- do.call("rbind.data.frame", purrr::map(seq_len(nrow(new_design$points)), function(i) {
   get_results(unlist(new_design$points[i,1:2], use.names = FALSE), N, nreps = 10, outs = c(out_name), times = 15)
 })) |> setNames(c(names(ranges), out_name))
-unif_rep_emsa <- create_boundary_ems(unif_rep_resa, out_name, ranges, rep(10, 40),
-                                    SIR_functions, bb_data, N, 0, c(1), out_index, t_point)
-unif_rep_resb <- do.call("rbind.data.frame", purrr::map(seq_len(nrow(design_with_reps)), function(i) {
-  get_results(unlist(design_with_reps[i,1:2], use.names = FALSE), N, nreps = 10, outs = c(out_name), times = 15)
+unif_rep_ems <- create_boundary_ems(unif_rep_res, out_name, ranges, rep(10, 40),
+                                     SIR_functions, bb_data, N, 0, c(1), out_index, t_point)
+## 3 - The full design
+# Setup
+new_design_res <- do.call('rbind.data.frame', purrr::map(seq_len(nrow(new_design$points)), function(i) {
+  if (i <= 20 && new_design$points[i,3] == 10) return(NULL)
+  get_results(unlist(new_design$points[i, 1:2], use.names = FALSE), N, nreps = ifelse(i <= 20, new_design$points[i,3]-10, new_design$points[i,3]),
+              outs = c(out_name), times = 15)
 })) |> setNames(c(names(ranges), out_name))
-unif_rep_emsb <- create_boundary_ems(unif_rep_resb, out_name, ranges, rep(10, 40),
-                                    SIR_functions, bb_data, N, 0, c(1), out_index, t_point)
-
-## Comparing predictive variance across the space
-new_varsa <- new_emsa$boundary_bulk$expectation$get_cov(big_grid)
-new_varsa[new_varsa < 0] <- 1e-6
-new_varsb <- new_emsb$boundary_bulk$expectation$get_cov(big_grid)
-new_varsb[new_varsb < 0] <- 1e-6
-basic_vars <- basic_ems$boundary_bulk$expectation$get_cov(big_grid)
-basic_vars[basic_vars < 0] <- 1e-6
-unif_rep_varsa <- unif_rep_emsa$boundary_bulk$expectation$get_cov(big_grid)
-unif_rep_varsa[unif_rep_varsa < 0] <- 1e-6
-unif_rep_varsb <- unif_rep_emsb$boundary_bulk$expectation$get_cov(big_grid)
-unif_rep_varsb[unif_rep_varsa < 0] <- 1e-6
-
-all_var_df <- cbind.data.frame(cbind.data.frame(big_grid, new_varsa, new_varsb, unif_rep_varsa, unif_rep_varsb)) |>
-  setNames(c('beta', 'gamma', 'Old', 'New', 'Uniform', 'Naive'))
+all_res <- rbind.data.frame(wave0_results, new_design_res)
+all_summary <- data.frame(all_res |> dplyr::group_by(across(all_of(names(ranges)))) |>
+                              dplyr::summarise(exp = mean(.data[[out_name]]), var = var(.data[[out_name]]), reps = length(.data[[out_name]])))
+new_design_ems <- create_boundary_ems(all_res, out_name, ranges, new_design$points$reps,
+                                SIR_functions, bb_data, N, 0, c(1), out_index, t_point)
+# Collating results: we include the predictive variance from the first wave of emulators too
+em_names <- c("basic_ems", "unif_rep_ems", "new_design_ems")
+all_var_df <- cbind.data.frame(cbind.data.frame(big_grid, exp_df$Vboth),
+                               do.call('cbind.data.frame', purrr::map(em_names, function(nm) {
+  these_ems <- get(nm)
+  these_vars <- these_ems$boundary_bulk$expectation$get_cov(big_grid)
+  these_vars[these_vars < 0] <- 1e-6
+  return(these_vars)
+}))) |> setNames(c("beta", "gamma", "Old", "Naive", "Uniform", "New"))
+## Checking the mean predictive variance for each set
+apply(all_var_df[,3:6], 2, mean)
+## Comparative plot
 comparison_plot(all_var_df, c("Old", "Uniform", "New", "Naive"), c("beta", "gamma"), "Variance", 
                 breaks = c(0, 10, 50, 100, 200, 500, 1000, 10000, 100000),
                 labels = c(
@@ -313,84 +317,3 @@ comparison_plot(all_var_df, c("Old", "Uniform", "New", "Naive"), c("beta", "gamm
   theme_minimal() +
   scale_x_continuous(expand = c(0.01,0.01)) +
   scale_y_continuous(expand = c(0.01,0.01))
-
-
-## Plotting the results: used here are the three emulator sets trained above with
-# the different proposals, as well as the original wave 1 stoch KBE emulators
-all_var_df <- cbind.data.frame(cbind.data.frame(big_grid, new_vars), cbind.data.frame(basic_vars, unif_rep_vars, old_vars)) |>
-  setNames(c('beta', 'gamma', 'New', 'Naive', "Uniform", "Old"))
-
-comparison_plot(all_var_df, c("Old", "Naive", "Uniform", "New"), c("beta", "gamma"), "Variance",
-                breaks = c(0, 10, 50, 100, 200, 500, 1000, 10000, 100000),
-                labels = c(
-                  TeX(r"($\[0, 10)$)"), TeX(r"($\[10, 50)$)"),
-                  TeX(r"($\[50, 100)$)"), TeX(r"($\[100, 200)$)"),
-                  TeX(r"($\[200, 500)$)"), TeX(r"($\[500, 10^4)$)"),
-                  TeX(r"($\[10^4, 10^5)$)"), TeX(r"($\[10^5, 10^6)$)")
-                ),
-                viridoption = "C") +
-  theme_minimal() +
-  scale_x_continuous(expand = c(0.01,0.01)) +
-  scale_y_continuous(expand = c(0.01,0.01))
-#### Paper Plots End Here ####
-
-
-############################################
-## Lasciate ogne speranza, voi ch'intrate ##
-############################################
-## Optional - animating the point proposal process
-library(gganimate)
-library(gifski)
-library(scales)
-# Function to convert proposed points into ordered data.frame of proposals over 'time'
-create_transition_data_frame <- function(data, order, nadd = 1, original_points = NULL) {
-  order <- rep(order, each = nadd)
-  df_list <- purrr::map(seq_along(order), function(i) {
-    relev_order <- order[1:i]
-    order_count <- purrr::map_dbl(unique(relev_order), ~sum(relev_order == .))
-    df <- data[unique(relev_order),]
-    df$reps <- order_count
-    df$time <- i
-    df
-  })
-  return(do.call('rbind.data.frame', df_list))
-}
-trans_df <- create_transition_data_frame(new_design$points, new_design$order, nadd = 2)
-for (i in seq_len(nrow(training_points))) {
-  for (j in unique(trans_df$time)) {
-    has_entry <- which(trans_df$time == j & trans_df$beta == training_points[i,"beta"] & trans_df$gamma == training_points[i,"gamma"])
-    if (length(has_entry) == 0) {
-      added_entry <- cbind.data.frame(training_points[i,1:2], data.frame(reps = 10, time = j)) |>
-        setNames(c(names(training_points)[1:2], "reps", "time"))
-      trans_df <- rbind.data.frame(trans_df, added_entry)
-    }
-    else {
-      trans_df[has_entry,"reps"] <- trans_df[has_entry, "reps"] + 10
-    }
-  }
-}
-trans_df <- trans_df[order(trans_df$time),]
-colour_mod <- c()
-for (i in seq_len(nrow(trans_df))) {
-  pt <- trans_df[i,1:2]
-  in_train <- purrr::map_lgl(seq_len(nrow(training_points)), function(j) {
-    all(pt == training_points[j, 1:2])
-  })
-  if (any(in_train)) colour_mod <- c(colour_mod, 1)
-  else colour_mod <- c(colour_mod, 0)
-}
-trans_df$mod <- colour_mod
-trans_df$mod <- factor(trans_df$mod, levels = c(0, 1))
-exp_df_rename <- setNames(exp_df_reshape, c('b', 'g', 'n', 'v'))
-anim_alt <- ggplot(data = trans_df, aes(x = beta, y = gamma)) +
-  geom_raster(data = subset(exp_df_rename, n == "Vboth"),
-              aes(x = b, y = g, fill = v), interpolate = TRUE) +
-  scale_fill_viridis(name = "Var") +
-  geom_point(data = trans_df, aes(x = beta, y = gamma, colour = mod, size = 2-(as.numeric(mod)-1)*0.5)) +
-  geom_text(data = trans_df, aes(y = gamma + 0.01, label = reps, size = 5-2*(as.numeric(mod)-1), colour = mod)) +
-  scale_colour_manual(values = c("1" = "grey80", "0" = "white")) +
-  transition_time(time) +
-  ease_aes("linear") +
-  theme(legend.position = "none") +
-  ggtitle("Repetitions Placed: {frame_time}")
-animate(anim_alt, nframes = 200, end_pause = 25, height = 800, width = 800)

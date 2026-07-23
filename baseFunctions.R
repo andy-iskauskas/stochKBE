@@ -13,6 +13,8 @@ library(MASS)
 ## Optional: future and optimParallel for parallelisation of proposal
 has_par_optim <- suppressWarnings(require(optimParallel))
 has_future <- suppressWarnings(require(future))
+
+### HELPER FUNCTIONS
 ## Gillespie algorithm for obtaining model realisations
 # N is a list containing initial compartment numbers,
 # pre- and post-transition matrices, and hazard function
@@ -89,12 +91,35 @@ get_results <- function(params, obj, nreps = 100, outs, times, raw = FALSE) {
   return(cbind(input_dat, do.call('rbind', collected)))
 }
 
-## Create boundary emulators
-# Takes data_raw (the full collection of data from Gillespie, eg), out_name (the
-# name of the output to emulate), ranges (parameter ranges), and reps (either a
-# single value if all parameter sets used the same number of realisations, or a
-# vector of numerics of length equal to the number of parameter sets). Returns
-# a list of emulators: prior, bulk only, boundary only, and bulk-boundary.
+### PUBLIC FUNCTIONS
+#' Create Boundary Emulators
+#' 
+#' Takes model run data and boundary information, and generates boundary emulators
+#' 
+#' For a stochastic model which admits (analytic) known boundaries, one can use
+#' this information to produce more accurate emulators across the entire space
+#' without requiring additional training points. This function takes existing
+#' training points and information about the boundary and creates the corresponding
+#' (Bayes linear) emulators for a stochastic known-boundary (KBE) system.
+#' 
+#' @param data_raw The model runs, where each row corresponds to one realisation
+#' of the model at a given parameter combination
+#' @param out_name The name of the output to emulate
+#' @param ranges The parameter ranges, as a list of (lower upper) pairs
+#' @param reps The number of repetitions afforded to each parameter combination
+#' @param analytics A collection of analytic functions specific to the model, arising
+#' as a result of the known boundary (see examples in `modelFunctions.R`)
+#' @param bb_data A collection of functions for boundary-bulk prediction (provided
+#' in `modelFunctions.R` for this particular case)
+#' @param model The specifics used for the Gillespie algorithm to perform model runs
+#' @param vals The boundary locations for each parameter
+#' @param indices The corresponding parameter indices to which `vals` apply
+#' @param out_index The index of the output in the list of model outputs
+#' @param t The model time of evaluation for the emulated output
+#' @param thetas The correlation lengths for the emulators; if NULL, they're
+#' determined via bounded MAP estimation.
+#' 
+#' @returns A appropriate list of emulators for no-boundary, boundary, boundary + bulk.
 create_boundary_ems <- function(data_raw, out_name, ranges, reps,
                                 analytics, bb_data, model,
                                 vals = c(0), indices = c(1), out_index, t,
@@ -111,8 +136,6 @@ create_boundary_ems <- function(data_raw, out_name, ranges, reps,
     }
     return(data.frame(out_arr) |> setNames(c(input_names, "exp", "var")))
   }
-  # data <- data.frame(data_raw |> dplyr::group_by(across(all_of(names(ranges)))) |>
-  #                      dplyr::summarise(exp = mean(.data[[out_name]]), var = var(.data[[out_name]])))
   data <- get_summary(data_raw, names(ranges), out_name)
   if (length(reps) == 1) reps <- rep(reps, nrow(data))
   if (!is.null(thetas))
@@ -179,85 +202,34 @@ create_boundary_ems <- function(data_raw, out_name, ranges, reps,
   )
 }
 
-## Scoring functions for variance reduction
-# Calculate the mean emulator variance across the space, using a representative
-# collection of points.
-mean_em_var <- function(pt, pre_em, var_em, data, reps, boundary_col = 1, boundary_val = 0, 
-                        invmat, new_point = NULL, new_rep = NULL, new_method = (nrow(data) > 70)) {
-  if (!is.null(new_point)) {
-    n_data <- rbind.data.frame(data, new_point)
-    datamutate <- (n_data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
-  }
-  else {
-    datamutate <- (data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
-  }
-  ptmutate <- (pt |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
-  term1 <- pre_em$u_sigma^2 * (1-r1(pt, pre_em, boundary_val, boundary_col)^2)
-  if (!is.null(new_point) && new_method) {
-    npmutate <- (new_point |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
-    term2a <- R1(pt, n_data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(ptmutate, datamutate, full = TRUE)
-    var_em_val_add <- var_em$get_exp(new_point)
-    if (var_em_val_add < 0) var_em_val_add <- 1e-6
-    b <- R1(data, new_point, pre_em, boundary_val, boundary_col) * pre_em$get_cov(datamutate[-nrow(datamutate),], npmutate)
-    c <- as.numeric(R1(new_point, new_point, pre_em, boundary_val, boundary_col) * pre_em$get_cov(npmutate) +
-      var_em_val_add/reps[length(reps)])
-    term2b <- part_inv(invmat, b, c)
-  }
-  else if (!is.null(new_rep) && new_method) {
-    rep_ind <- which(new_rep != 0)
-    modif <- new_rep[rep_ind]/(reps[rep_ind]*(reps+new_rep)[rep_ind])
-    term2a <- R1(pt, data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(ptmutate, datamutate, full = TRUE)
-    var_em_val <- var_em$get_exp(data[rep_ind,,drop=FALSE])
-    if (var_em_val < 0) var_em_val <- 1e-6
-    uval <- as.numeric(sqrt(modif * var_em_val))
-    denom <- 1 - uval^2 * invmat[rep_ind,rep_ind]
-    num <- uval^2 * outer(c(invmat[rep_ind,]), c(invmat[rep_ind,]), "*")
-    term2b <- invmat + num/denom
-  }
-  else {
-    if (!is.null(new_rep)) reps <- reps + new_rep
-    if (!is.null(new_point)) data <- rbind.data.frame(data, new_point)
-    term2a <- R1(pt, data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(ptmutate, datamutate, full = TRUE)
-    var_em_vals <- var_em$get_exp(data)
-    var_em_vals[var_em_vals < 0] <- 1e-6
-    term2binv <- R1(data, data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(datamutate, full = TRUE) +
-      diag(c(1/reps * var_em_vals))
-    term2b <- tryCatch(chol2inv(chol(term2binv)),
-                       error = function(e) MASS::ginv(term2binv))
-  }
-  diag_res <- mahalanobis(term2a, center = FALSE, cov = term2b, inverted = TRUE)
-  complete <- term1 - diag_res
-  complete <- complete[complete > 0]
-  #complete[complete < 0] <- 1e-6
-  return(mean(complete))
-}
-# Calculate the score due to including a new design point
-new_point_score <- function(point, points, pre_em, var_em, reps, grid, invmat, ntoadd = 1,
-                            boundary_col, boundary_val) {
-  #new_data <- rbind.data.frame(points, point)
-  if (is.null(point)) {
-    warning("Point is NULL.")
-    new_reps <- reps
-  }
-  else
-    new_reps <- c(reps, ntoadd)
-  vars <- mean_em_var(grid, pre_em, var_em, points, new_reps, boundary_col, boundary_val, invmat, point)
-  return(vars)
-}
-# Calculate the score due to adding a repetition at an existing design point
-new_rep_score <- function(index, points, pre_em, var_em, reps, grid, invmat, ntoadd = 1,
-                          boundary_col, boundary_val) {
-  new_reps <- rep(0, length(reps))
-  new_reps[index] <- ntoadd
-  vars <- mean_em_var(grid, pre_em, var_em, points, reps, boundary_col,
-                      boundary_val, invmat, new_rep = new_reps)
-  return(vars)
-}
-
-rep_allocate <- function(points, var_em, rep_max, ntoadd) {
+#' Rep Allocation
+#' 
+#' Given a design, determines the 'optimal' means of allocating reps.
+#' 
+#' For a given collection of points and a budget of repetitions to be performed,
+#' the optimal strategy might not to be to equally spread the repetitions across
+#' the points. For instance, if a model is more stochastic in particular places,
+#' it may be beneficial to allocate more repetitions to those parts of space at
+#' the expense of the less variable parts. This function allocates the budget of
+#' repetitions based on the principle of balancing the stochastic variability,
+#' E[f_v(x)]/n, over all design points (f_v(x) here is the emulator for the
+#' stochasticity).
+#' 
+#' Note that for an augmented design, the repetitions allocated can be afforded
+#' to new design points or as an addition to old design points. The points provided
+#' to this function therefore comprise both the new *and* old design points.
+#' 
+#' @param points The design points, including original design points and initial rep number
+#' @param var_em The emulator for the stochasticity
+#' @param rep_max The maximum number of repetitions to be allocated
+#' @param ntoadd The number of repetitions to be allocated at each iteration
+#' @param new_index The row-index of the first new design point.
+#' 
+#' @returns A data.frame of design points with a column corresponding to the reps.
+rep_allocate <- function(points, var_em, rep_max, ntoadd, new_index = floor(nrow(points)/2)+1) {
   v_em_vals <- var_em$get_exp(points)
   rep_vals <- points$reps
-  rep_vals[!is.finite(rep_vals)] <- ntoadd
+  rep_vals[seq(new_index, length(rep_vals))] <- ntoadd
   total_reps <- sum(rep_vals)
   while(total_reps < rep_max) {
     old_v_vals <- v_em_vals/rep_vals
@@ -270,46 +242,30 @@ rep_allocate <- function(points, var_em, rep_max, ntoadd) {
   return(points)
 }
 
-imspe <- function(grid, b_em, v_em, data, reps,
-                  invmat, new_point = NULL,
-                  new_method = (nrow(data) > 70)) {
-  if (!is.null(new_point)) {
-    n_data <- rbind.data.frame(data, new_point)
-  }
-  else {
-    n_data <- data
-  }
-  term1 <- b_em$get_cov(grid)
-  term2a <- b_em$get_cov(grid, n_data, full = TRUE)
-  if (!is.null(new_point) && new_method) {
-    if (missing(invmat)) {
-      vmat <- b_em$get_cov(data, full = TRUE)
-      invmat <- tryCatch(chol2inv(chol(vmat)), error = function(e) MASS::ginv(vmat))
-    }
-    b <- b_em$get_cov(data, new_point, full = TRUE)
-    c <- b_em$get_cov(new_point)
-    term2b <- part_inv(invmat, b, c)
-  }
-  else {
-    var_em_vals <- v_em$get_exp(data)
-    var_em_vals[var_em_vals < 0] <- 1e-6
-    t1 <- b_em$get_cov(n_data, full = TRUE)
-    t2 <- diag(c(var_em_vals/reps, 0))
-    term2binv <- b_em$get_cov(n_data, full = TRUE)
-    if (!is.null(new_point))
-      term2binv <- term2binv + diag(c(var_em_vals/reps, 0))
-    else
-      term2binv <- term2binv + diag(var_em_vals/reps)
-    term2b <- tryCatch(chol2inv(chol(term2binv)), error = function(e) MASS::ginv(term2binv))
-  }
-  diag_res <- mahalanobis(term2a, center = FALSE, cov = term2b, inverted = TRUE)
-  complete <- term1 - diag_res
-  return(mean(complete))
-}
-
-imspe2 <- function(pt, pre_em, data,
-                   new_point, invmat,
-                   boundary_col = 1, boundary_val = 0) {
+#' IMSPE Function
+#'
+#' Calculates 'integrated mean-squared prediction error', aka mean emulator
+#' variance, generated due to the inclusion of a new training point. The mean
+#' emulator variance computed is an approximation of the truth, based on evaluating
+#' the emulator variance over a large grid of points. The results account for any
+#' boundary information.
+#' 
+#' It can also be used to determine emulator variance across the space (for plotting,
+#' for example) via the `return.raw` argument.
+#' 
+#' @param pt The grid on which to evaluate points
+#' @param pre_em The base emulator, unexposed to training points or the boundary
+#' @param data The training points currently used
+#' @param new_point The new point to be included in the training data
+#' @boundary_col The column (or columns) of the data frame for which a boundary exists
+#' @boundary_val The corresponding locations of the boundaries; one per boundary_col element
+#' @param return.raw If TRUE, returns the emulator variance at each (grid) point
+#' 
+#' @returns Either the mean emulator variance, or a data.frame of points and emulator variances.
+imspe <- function(pt, pre_em, data,
+                  new_point, invmat,
+                  boundary_col = 1, boundary_val = 0,
+                  return.raw = FALSE) {
   n_data <- rbind.data.frame(data, new_point)
   data_mutate <- (n_data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
   pt_mutate <- (pt |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
@@ -323,14 +279,45 @@ imspe2 <- function(pt, pre_em, data,
   term2b <- part_inv(invmat, b, c)
   diag_res <- mahalanobis(term2a, center = FALSE, cov = term2b, inverted = TRUE)
   complete <- term1 - diag_res
+  if (return.raw) {
+    return(cbind.data.frame(pt, complete) |> setNames(c(names(pt), "V")))
+  }
   complete <- complete[complete > 0]
   return(mean(complete))
 }
 
-## New 'optimal' design strategy
+#' Design choice for stochastic known-boundary models
+#' 
+#' Chooses a new collection of point locations for an emulated stochastic system.
+#' 
+#' Given an existing design and emulators trained on those design points, with
+#' understanding of known boundaries in the system, this function aims to pick a
+#' good design of points for future emulators to be trained on. The design process
+#' assumes that 'infinite' repetitions are available when considering design sites;
+#' the choice of where to put a (finite) repetition allocation is dealt with in
+#' `rep_allocate()`.
+#' 
+#' @param data The training points provided to the emulators
+#' @param b_em The 'basic' emulator: no boundary knowledge and not trained on `data`
+#' @param v_em The (trained) variance emulator for the system
+#' @param reps The  initial reps provided for each training point
+#' @param ranges The parameter ranges, as a list of pairs (lower, upper)
+#' @param testgrid_pts The number of points to evaluate on (for `imspe`)
+#' @param pt_max The maximum number of new design points to select
+#' @param boundary_col The parameters for which a boundary exists
+#' @param boundary_val The corresponding locations of each boundary; one per parameter
+#' @param nrepsadd The number of repetitions to add (initially) to each design point
+#' @param verbose If TRUE, prints out details of the imspe at each selection
+#' @param return_scores If TRUE, provides the imspe scores as well as the points
+#' @param in_par If TRUE, tries to parallelise the computation
+#' @param nrandomrestart Determines the number of different seeding locations for optim
+#' 
+#' @returns Either a data.frame of proposed points, or (if `return_scores` is TRUE)
+#' a list consisting of this data.frame and a vector of imspe scores.
 point_design <- function(data, b_em, v_em, reps, ranges, testgrid_pts, pt_max,
                          boundary_col, boundary_val, nrepsadd = reps[1],
-                         verbose = FALSE, return_scores = FALSE, in_par = FALSE) {
+                         verbose = FALSE, return_scores = FALSE, in_par = FALSE,
+                         nrandomrestart = 10) {
   if (return_scores)
     p_scores <- c()
   tlhs <- lhs::randomLHS(testgrid_pts, length(ranges))
@@ -347,24 +334,32 @@ point_design <- function(data, b_em, v_em, reps, ranges, testgrid_pts, pt_max,
     opt_func <- function(x) {
       x_mod <- data.frame(matrix(x, nrow = 1)) |> setNames(names(ranges))
       x_mod <- x_mod[,names(ranges), drop = FALSE]
-      imspe2(testgrid, b_em, data, x_mod, start_inv, boundary_col, boundary_val)
+      imspe(testgrid, b_em, data, x_mod, start_inv, boundary_col, boundary_val)
     }
-    if (has_par_optim && in_par)
-      optimised <- optimParallel(map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
-                                 lower = map_dbl(ranges, ~.[[1]]),
-                                 upper = map_dbl(ranges, ~.[[2]]),
-                                 # lower = map_dbl(ranges, ~.[[1]]+0.01*diff(.)),
-                                 # upper = map_dbl(ranges, ~.[[2]]-0.01*diff(.)),
-                                 control = list(trace = FALSE))
-    else
-      optimised <- optim(map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
-                         lower = map_dbl(ranges, ~.[[1]]),
-                         upper = map_dbl(ranges, ~.[[2]]),
-                         # lower = map_dbl(ranges, ~.[[1]]+0.01*diff(.)),
-                         # upper = map_dbl(ranges, ~.[[2]]-0.01*diff(.)),
-                         method = "L-BFGS-B", control = list(trace = FALSE))
-    this_val <- optimised$value
-    this_pt <- data.frame(matrix(optimised$par, nrow = 1)) |> setNames(names(ranges))
+    if (has_par_optim && in_par) {
+      possible_points <- purrr::map(seq_len(nrandomrestart), function(i) {
+        optimised <- optimParallel(map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
+                                   lower = map_dbl(ranges, ~.[[1]]),
+                                   upper = map_dbl(ranges, ~.[[2]]),
+                                   control = list(trace = FALSE))
+        list(val = optimised$value, pt = data.frame(matrix(optimised$par, nrow = 1)) |> setNames(names(ranges)))
+      })
+      vals <- purrr::map_dbl(possible_points, "val")
+      this_val <- min(vals)
+      this_pt <- possible_points[[which.min(vals)]]$pt
+    }
+    else {
+      possible_points <- purrr::map(seq_len(nrandomrestart), function(i) {
+        optimised <- optim(map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
+                           lower = map_dbl(ranges, ~.[[1]]),
+                           upper = map_dbl(ranges, ~.[[2]]),
+                           method = "L-BFGS-B", control = list(trace = FALSE))
+        list(val = optimised$value, pt = data.frame(matrix(optimised$par, nrow = 1)) |> setNames(names(ranges)))
+      })
+      vals <- purrr::map_dbl(possible_points, "val")
+      this_val <- min(vals)
+      this_pt <- possible_points[[which.min(vals)]]$pt
+    }
     dists <- apply(data, 1, function(x) {
       sum((x-this_pt)^2)
     })
@@ -393,6 +388,87 @@ point_design <- function(data, b_em, v_em, reps, ranges, testgrid_pts, pt_max,
   return(pts_with_reps)
 }
 
+########################
+#### NOW DEPRECATED ####
+########################
+## Scoring functions for variance reduction
+# Calculate the mean emulator variance across the space, using a representative
+# collection of points.
+# mean_em_var <- function(pt, pre_em, var_em, data, reps, boundary_col = 1, boundary_val = 0, 
+#                         invmat, new_point = NULL, new_rep = NULL, new_method = (nrow(data) > 70),
+#                         return.raw = FALSE) {
+#   if (!is.null(new_point)) {
+#     n_data <- rbind.data.frame(data, new_point)
+#     datamutate <- (n_data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
+#   }
+#   else {
+#     datamutate <- (data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
+#   }
+#   ptmutate <- (pt |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
+#   term1 <- pre_em$u_sigma^2 * (1-r1(pt, pre_em, boundary_val, boundary_col)^2)
+#   if (!is.null(new_point) && new_method) {
+#     npmutate <- (new_point |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
+#     term2a <- R1(pt, n_data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(ptmutate, datamutate, full = TRUE)
+#     var_em_val_add <- var_em$get_exp(new_point)
+#     if (var_em_val_add < 0) var_em_val_add <- 1e-6
+#     b <- R1(data, new_point, pre_em, boundary_val, boundary_col) * pre_em$get_cov(datamutate[-nrow(datamutate),], npmutate)
+#     c <- as.numeric(R1(new_point, new_point, pre_em, boundary_val, boundary_col) * pre_em$get_cov(npmutate) +
+#       var_em_val_add/reps[length(reps)])
+#     term2b <- part_inv(invmat, b, c)
+#   }
+#   else if (!is.null(new_rep) && new_method) {
+#     rep_ind <- which(new_rep != 0)
+#     modif <- new_rep[rep_ind]/(reps[rep_ind]*(reps+new_rep)[rep_ind])
+#     term2a <- R1(pt, data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(ptmutate, datamutate, full = TRUE)
+#     var_em_val <- var_em$get_exp(data[rep_ind,,drop=FALSE])
+#     if (var_em_val < 0) var_em_val <- 1e-6
+#     uval <- as.numeric(sqrt(modif * var_em_val))
+#     denom <- 1 - uval^2 * invmat[rep_ind,rep_ind]
+#     num <- uval^2 * outer(c(invmat[rep_ind,]), c(invmat[rep_ind,]), "*")
+#     term2b <- invmat + num/denom
+#   }
+#   else {
+#     if (!is.null(new_rep)) reps <- reps + new_rep
+#     if (!is.null(new_point)) data <- rbind.data.frame(data, new_point)
+#     term2a <- R1(pt, data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(ptmutate, datamutate, full = TRUE)
+#     var_em_vals <- var_em$get_exp(data)
+#     var_em_vals[var_em_vals < 0] <- 1e-6
+#     term2binv <- R1(data, data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(datamutate, full = TRUE) +
+#       diag(c(1/reps * var_em_vals))
+#     term2b <- tryCatch(chol2inv(chol(term2binv)),
+#                        error = function(e) MASS::ginv(term2binv))
+#   }
+#   diag_res <- mahalanobis(term2a, center = FALSE, cov = term2b, inverted = TRUE)
+#   complete <- term1 - diag_res
+#   if (return.raw) {
+#     return(cbind.data.frame(pt, complete) |> setNames(c(names(pt), "V")))
+#   }
+#   complete <- complete[complete > 0]
+#   #complete[complete < 0] <- 1e-6
+#   return(mean(complete))
+# }
+# Calculate the score due to including a new design point
+# new_point_score <- function(point, points, pre_em, var_em, reps, grid, invmat, ntoadd = 1,
+#                             boundary_col, boundary_val) {
+#   #new_data <- rbind.data.frame(points, point)
+#   if (is.null(point)) {
+#     warning("Point is NULL.")
+#     new_reps <- reps
+#   }
+#   else
+#     new_reps <- c(reps, ntoadd)
+#   vars <- mean_em_var(grid, pre_em, var_em, points, new_reps, boundary_col, boundary_val, invmat, point)
+#   return(vars)
+# }
+# Calculate the score due to adding a repetition at an existing design point
+# new_rep_score <- function(index, points, pre_em, var_em, reps, grid, invmat, ntoadd = 1,
+#                           boundary_col, boundary_val) {
+#   new_reps <- rep(0, length(reps))
+#   new_reps[index] <- ntoadd
+#   vars <- mean_em_var(grid, pre_em, var_em, points, reps, boundary_col,
+#                       boundary_val, invmat, new_rep = new_reps)
+#   return(vars)
+# }
 ## Chooses an 'optimal' design
 # Given a set of data points, progressively adds points to a candidate
 # set or adds a rep to an existing point in the candidate set. Calculations of
@@ -400,117 +476,117 @@ point_design <- function(data, b_em, v_em, reps, ranges, testgrid_pts, pt_max,
 # over a grid of points, testgrid: the more dense the grid, the more accurate the
 # estimate, but the more computationally intensive it is. Returns the collection
 # of points, along with a column denoting how many reps are to be run at each point.
-design_subselect <- function(data, pre_em, var_em, reps, ranges, testgrid,
-                              rep_max, pt_max, ntoadd = 1,
-                              store_order = FALSE, verbose = FALSE,
-                              return_scores = FALSE, boundary_col = 1, boundary_val = 0,
-                             rep_favour_factor = 1) {
-  if (store_order) order_vector <- c()
-  if (return_scores) {
-    r_scores <- c()
-    p_scores <- c()
-  }
-  find_next_point <- function(data, pre_em, var_em, reps, ranges, ntoadd, boundary_col, boundary_val) {
-    datamutate <- (data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
-    v_em_vals <- var_em$get_exp(data)
-    v_em_vals[v_em_vals < 0] <- 1e-6
-    start_inv <- R1(data, data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(datamutate, full = TRUE) +
-      diag(c(v_em_vals/reps))
-    start <- tryCatch(
-      chol2inv(chol(start_inv)),
-      error = function(e) MASS::ginv(start_inv)
-    )
-    opt_func <- function(x) {
-      x_mod <- data.frame(matrix(x, nrow = 1)) |> setNames(names(ranges))
-      x_mod <- x_mod[,names(ranges), drop = FALSE]
-      new_point_score(x_mod, data, pre_em, var_em, reps, testgrid, start, ntoadd,
-                      boundary_col, boundary_val)
-    }
-    if (has_par_optim)
-      optimised <- optimParallel(map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
-                         lower = map_dbl(ranges, ~.[[1]]+0.01*diff(.)),
-                         upper = map_dbl(ranges, ~.[[2]]-0.01*diff(.)),
-                         control = list(trace = FALSE))
-    else
-      optimised <- optim(map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
-                         lower = map_dbl(ranges, ~.[[1]]+0.01*diff(.)),
-                         upper = map_dbl(ranges, ~.[[2]]-0.01*diff(.)),
-                         method = "L-BFGS-B", control = list(trace = FALSE))
-    this_val <- optimised$value
-    this_pt <- data.frame(matrix(optimised$par, nrow = 1)) |> setNames(names(ranges))
-    dists <- apply(data, 1, function(x) {
-      sum((x-this_pt)^2)
-    })
-    if (this_val < 0) this_val <- Inf
-    if (any(dists < 1e-6)) this_val <- NaN
-    return(list(val = this_val, point = this_pt))
-  }
-  find_next_rep <- function(data, pre_em, var_em, reps, ntoadd, boundary_col, boundary_val) {
-    datamutate <- (data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
-    v_em_vals <- var_em$get_exp(data)
-    v_em_vals[v_em_vals < 0] <- 1e-6
-    start_inv <- R1(data, data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(datamutate, full = TRUE) +
-      diag(c(1/v_em_vals * reps))
-    start <- tryCatch(
-      chol2inv(chol(start_inv)),
-      error = function(e) MASS::ginv(start_inv)
-    )
-    if (has_future)
-      rep_vals <- furrr::future_map_dbl(seq_len(nrow(data)), function(i) {
-        new_rep_score(i, data, pre_em, var_em, reps, testgrid, start, ntoadd, boundary_col, boundary_val)
-      })
-    else
-      rep_vals <- map_dbl(seq_len(nrow(data)), function(i) {
-        new_rep_score(i, data, pre_em, var_em, reps, testgrid, start, ntoadd, boundary_col, boundary_val)
-      })
-    return(list(val = min(rep_vals), index = which.min(rep_vals)))
-  }
-  failsafe <- 0
-  while(sum(reps) < rep_max && failsafe < 10000) {
-    rep_suggest <- find_next_rep(data, pre_em, var_em, reps, ntoadd, boundary_col, boundary_val)
-    if (nrow(data) < pt_max) {
-      pt_suggest <- find_next_point(data, pre_em, var_em, reps, ranges, ntoadd, boundary_col, boundary_val)
-      pt_suggest$val <- rep_favour_factor * pt_suggest$val
-    }
-    else
-      pt_suggest <- NULL
-    if (verbose) {
-      print_str <- paste0("Proposal ", failsafe+1, ":")
-      if (!is.null(pt_suggest)) {
-        print_str <- paste0(print_str, " Point score ", signif(pt_suggest$val, 4), ";")
-      }
-      print_str <- paste0(print_str, " Rep score ", signif(rep_suggest$val, 4))
-      if (!is.null(pt_suggest) && !is.nan(pt_suggest$val)) {
-        if (pt_suggest$val < rep_suggest$val)
-          print_str <- paste0(print_str, " - New point chosen;")
-        else
-          print_str <- paste0(print_str, " - Extra rep chosen;")
-      }
-      else
-        print_str <- paste0(print_str, " - Extra rep chosen;")
-      print(print_str)
-    }
-    if (return_scores) {
-      r_scores <- c(r_scores, rep_suggest$val)
-      if (is.null(pt_suggest)) p_scores <- c(p_scores, Inf)
-      else p_scores <- c(p_scores, pt_suggest$val)
-    }
-    if (is.null(pt_suggest) || is.nan(pt_suggest$val) || rep_suggest$val < pt_suggest$val) {
-      reps[rep_suggest$index] <- reps[rep_suggest$index] + ntoadd
-      if (store_order) order_vector <- c(order_vector, rep_suggest$index)
-    }
-    else {
-      data <- rbind.data.frame(data, pt_suggest$point)
-      reps <- c(reps, ntoadd)
-      if (store_order) order_vector <- c(order_vector, nrow(data))
-    }
-    failsafe <- failsafe + 1
-  }
-  pts_with_reps <- cbind.data.frame(data, reps) |> setNames(c(names(data), "reps"))
-  if (store_order) {
-    if (return_scores)
-      return(list(points = pts_with_reps, order = order_vector, rep_scores = r_scores, pt_scores = p_scores))
-    return(list(points = pts_with_reps, order = order_vector))
-  }
-  return(pts_with_reps)
-}
+# design_subselect <- function(data, pre_em, var_em, reps, ranges, testgrid,
+#                               rep_max, pt_max, ntoadd = 1,
+#                               store_order = FALSE, verbose = FALSE,
+#                               return_scores = FALSE, boundary_col = 1, boundary_val = 0,
+#                              rep_favour_factor = 1) {
+#   if (store_order) order_vector <- c()
+#   if (return_scores) {
+#     r_scores <- c()
+#     p_scores <- c()
+#   }
+#   find_next_point <- function(data, pre_em, var_em, reps, ranges, ntoadd, boundary_col, boundary_val) {
+#     datamutate <- (data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
+#     v_em_vals <- var_em$get_exp(data)
+#     v_em_vals[v_em_vals < 0] <- 1e-6
+#     start_inv <- R1(data, data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(datamutate, full = TRUE) +
+#       diag(c(v_em_vals/reps))
+#     start <- tryCatch(
+#       chol2inv(chol(start_inv)),
+#       error = function(e) MASS::ginv(start_inv)
+#     )
+#     opt_func <- function(x) {
+#       x_mod <- data.frame(matrix(x, nrow = 1)) |> setNames(names(ranges))
+#       x_mod <- x_mod[,names(ranges), drop = FALSE]
+#       new_point_score(x_mod, data, pre_em, var_em, reps, testgrid, start, ntoadd,
+#                       boundary_col, boundary_val)
+#     }
+#     if (has_par_optim)
+#       optimised <- optimParallel(map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
+#                          lower = map_dbl(ranges, ~.[[1]]+0.01*diff(.)),
+#                          upper = map_dbl(ranges, ~.[[2]]-0.01*diff(.)),
+#                          control = list(trace = FALSE))
+#     else
+#       optimised <- optim(map_dbl(ranges, ~runif(1, .[[1]], .[[2]])), opt_func,
+#                          lower = map_dbl(ranges, ~.[[1]]+0.01*diff(.)),
+#                          upper = map_dbl(ranges, ~.[[2]]-0.01*diff(.)),
+#                          method = "L-BFGS-B", control = list(trace = FALSE))
+#     this_val <- optimised$value
+#     this_pt <- data.frame(matrix(optimised$par, nrow = 1)) |> setNames(names(ranges))
+#     dists <- apply(data, 1, function(x) {
+#       sum((x-this_pt)^2)
+#     })
+#     if (this_val < 0) this_val <- Inf
+#     if (any(dists < 1e-6)) this_val <- NaN
+#     return(list(val = this_val, point = this_pt))
+#   }
+#   find_next_rep <- function(data, pre_em, var_em, reps, ntoadd, boundary_col, boundary_val) {
+#     datamutate <- (data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
+#     v_em_vals <- var_em$get_exp(data)
+#     v_em_vals[v_em_vals < 0] <- 1e-6
+#     start_inv <- R1(data, data, pre_em, boundary_val, boundary_col) * pre_em$get_cov(datamutate, full = TRUE) +
+#       diag(c(1/v_em_vals * reps))
+#     start <- tryCatch(
+#       chol2inv(chol(start_inv)),
+#       error = function(e) MASS::ginv(start_inv)
+#     )
+#     if (has_future)
+#       rep_vals <- furrr::future_map_dbl(seq_len(nrow(data)), function(i) {
+#         new_rep_score(i, data, pre_em, var_em, reps, testgrid, start, ntoadd, boundary_col, boundary_val)
+#       })
+#     else
+#       rep_vals <- map_dbl(seq_len(nrow(data)), function(i) {
+#         new_rep_score(i, data, pre_em, var_em, reps, testgrid, start, ntoadd, boundary_col, boundary_val)
+#       })
+#     return(list(val = min(rep_vals), index = which.min(rep_vals)))
+#   }
+#   failsafe <- 0
+#   while(sum(reps) < rep_max && failsafe < 10000) {
+#     rep_suggest <- find_next_rep(data, pre_em, var_em, reps, ntoadd, boundary_col, boundary_val)
+#     if (nrow(data) < pt_max) {
+#       pt_suggest <- find_next_point(data, pre_em, var_em, reps, ranges, ntoadd, boundary_col, boundary_val)
+#       pt_suggest$val <- rep_favour_factor * pt_suggest$val
+#     }
+#     else
+#       pt_suggest <- NULL
+#     if (verbose) {
+#       print_str <- paste0("Proposal ", failsafe+1, ":")
+#       if (!is.null(pt_suggest)) {
+#         print_str <- paste0(print_str, " Point score ", signif(pt_suggest$val, 4), ";")
+#       }
+#       print_str <- paste0(print_str, " Rep score ", signif(rep_suggest$val, 4))
+#       if (!is.null(pt_suggest) && !is.nan(pt_suggest$val)) {
+#         if (pt_suggest$val < rep_suggest$val)
+#           print_str <- paste0(print_str, " - New point chosen;")
+#         else
+#           print_str <- paste0(print_str, " - Extra rep chosen;")
+#       }
+#       else
+#         print_str <- paste0(print_str, " - Extra rep chosen;")
+#       print(print_str)
+#     }
+#     if (return_scores) {
+#       r_scores <- c(r_scores, rep_suggest$val)
+#       if (is.null(pt_suggest)) p_scores <- c(p_scores, Inf)
+#       else p_scores <- c(p_scores, pt_suggest$val)
+#     }
+#     if (is.null(pt_suggest) || is.nan(pt_suggest$val) || rep_suggest$val < pt_suggest$val) {
+#       reps[rep_suggest$index] <- reps[rep_suggest$index] + ntoadd
+#       if (store_order) order_vector <- c(order_vector, rep_suggest$index)
+#     }
+#     else {
+#       data <- rbind.data.frame(data, pt_suggest$point)
+#       reps <- c(reps, ntoadd)
+#       if (store_order) order_vector <- c(order_vector, nrow(data))
+#     }
+#     failsafe <- failsafe + 1
+#   }
+#   pts_with_reps <- cbind.data.frame(data, reps) |> setNames(c(names(data), "reps"))
+#   if (store_order) {
+#     if (return_scores)
+#       return(list(points = pts_with_reps, order = order_vector, rep_scores = r_scores, pt_scores = p_scores))
+#     return(list(points = pts_with_reps, order = order_vector))
+#   }
+#   return(pts_with_reps)
+# }
