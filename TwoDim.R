@@ -150,10 +150,12 @@ clusterEvalQ(cl, library(hmer))
 clusterExport(cl, c("imspe", "part_inv", "R1", "r1"))
 ## We assume two repetitions will be placed per design point initially...
 new_design <- point_design(training_points, this_base_em, this_var_em,
-                           rep(10, 20), ranges, 40^2, 40, verbose = TRUE, return_scores = TRUE,
+                           rep(10, 20), ranges, 40^2, 40, 400, verbose = TRUE, return_scores = TRUE,
                            in_par = TRUE, boundary_col = 1, boundary_val = 0, nrepsadd = 2)
 ## ...then we allocate the full complement of reps.
-new_design_with_reps <- rep_allocate(new_design$points, this_var_em, 400, 2)
+nd <- new_design$points
+nd$reps <- rep(c(10, 2), each = 20)
+new_design_with_reps <- rep_allocate(nd, this_var_em, 400, 1)
 
 ## Plotting the proposal result
 ### A quick-and-dirty function to ensure that annotated repetition numbers don't
@@ -168,10 +170,13 @@ ggplot(data = subset(exp_df_reshape, name == "Vboth"), aes(x = beta, y = gamma))
   geom_raster(aes(fill = value), interpolate = TRUE) +
   scale_fill_gradientn(name = "Var", colours = viridis::viridis(17, option = "A"),
                        values = c(0, 0.00625, 0.0125, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1)) +
-  geom_point(data = new_design_with_reps, col = rep(c("grey40", "white"), each = 20), size = rep(c(0.8, 1), each = 20)) +
+  geom_point(data = new_design_with_reps,
+             col = rep(c("grey40", "white"), times = c(20, nrow(new_design_with_reps)-20)),
+             size = rep(c(0.8, 1), times = c(20, nrow(new_design_with_reps)-20))) +
   geom_text(data = new_design_with_reps, aes(label = reps),
             y = sapply(new_design_with_reps$gamma, get_loc),
-            col = rep(c("grey40", "white"), each = 20), size = rep(c(3, 4), each = 20)) +
+            col = rep(c("grey40", "white"), times = c(20, nrow(new_design_with_reps)-20)),
+            size = rep(c(3, 4), times = c(20, nrow(new_design_with_reps)-20))) +
   theme_minimal() +
   scale_x_continuous(expand = c(0,0.01)) +
   scale_y_continuous(expand = c(0.01,0)) +
@@ -182,10 +187,13 @@ ggplot(data = subset(var_df_reshape, name == "Eboth"), aes(x = beta, y = gamma))
   geom_raster(aes(fill = value), interpolate = TRUE) +
   scale_fill_gradientn(name = "Exp", colours = viridis::viridis(17, option = "B"),
                        values = c(0, 0.00625, 0.0125, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1)) +
-  geom_point(data = new_design_with_reps, col = rep(c("grey40", "white"), each = 20), size = rep(c(0.8, 1), each = 20)) +
+  geom_point(data = new_design_with_reps,
+             col = rep(c("grey40", "white"), times = c(20, nrow(new_design_with_reps)-20)),
+             size = rep(c(0.8, 1), times = c(20, nrow(new_design_with_reps)-20))) +
   geom_text(data = new_design_with_reps, aes(label = reps),
             y = sapply(new_design_with_reps$gamma, get_loc),
-            col = rep(c("grey40", "white"), each = 20), size = rep(c(3, 4), each = 20)) +
+            col = rep(c("grey40", "white"), times = c(20, nrow(new_design_with_reps)-20)),
+            size = rep(c(3, 4), times = c(20, nrow(new_design_with_reps)-20))) +
   theme_minimal() +
   scale_x_continuous(expand = c(0,0.01)) +
   scale_y_continuous(expand = c(0.01,0)) +
@@ -193,7 +201,7 @@ ggplot(data = subset(var_df_reshape, name == "Eboth"), aes(x = beta, y = gamma))
 
 ## Alternate plotting: show the updated emulator variance as each point is added.
 # For this, we need variance data.frames for each intermediate design
-design_dfs <- purrr::map(21:40, function(i) {
+design_dfs <- purrr::map(21:nrow(new_design_with_reps), function(i) {
   subset_data <- new_design$points[1:(i-1),1:2]
   subset_data_mutate <- (subset_data |> dplyr::mutate(across(all_of(1), ~0)))
   v_em_vals <- this_var_em$get_exp(subset_data)
@@ -204,8 +212,8 @@ design_dfs <- purrr::map(21:40, function(i) {
     diag(c(v_em_vals/rps[1:(i-1)]))
   start_inv <- tryCatch(chol2inv(chol(start_mat)), error = function(e) MASS::ginv(start_mat))
   x_mod <- new_design$points[i,1:2,drop=FALSE]
-  outpt <- imspe(big_grid, this_base_em,
-                  subset_data, x_mod, start_inv, return.raw = TRUE)
+  outpt <- imspe(big_grid, this_base_em, this_var_em,
+                  subset_data, x_mod, start_inv, rps[i], return.raw = TRUE)
   return(outpt)
 })
 orig_df <- exp_df[,c("beta", "gamma", "Vboth")] |> setNames(c("beta", "gamma", "V"))
@@ -213,13 +221,13 @@ orig_df <- exp_df[,c("beta", "gamma", "Vboth")] |> setNames(c("beta", "gamma", "
 orig_df[orig_df$V < 0, "V"] <- 1e-6
 # A not necessarily nice combining of the initial data.frame and the new ones.
 all_dfs <- list(orig_df)
-for (i in 1:20) {
+for (i in 1:(nrow(new_design_with_reps)-20)) {
   this_df <- design_dfs[[i]]
   this_df[this_df$V < 0, "V"] <- 1e-6
   all_dfs[[i+1]] <- this_df
 }
 ## Create the plots: 21 in total
-gplots <- purrr::map(21:41, function(i) {
+gplots <- purrr::map(21:(nrow(new_design_with_reps)+1), function(i) {
   df <- all_dfs[[i-20]]
   g <- ggplot(data = df, aes(x = beta, y = gamma)) +
     geom_raster(aes(fill = V), interpolate = TRUE) +
@@ -249,9 +257,9 @@ gplots <- purrr::map(21:41, function(i) {
          x = TeX("$\\beta$"), y = TeX("$\\gamma$"))
 })
 ## Optional: save to a pdf
-# pdf(file = "../../StochPropPlot.pdf")
-# for (i in gplots) print(i)
-# dev.off()
+pdf(file = "../../StochPropPlotAlt.pdf")
+for (i in gplots) print(i)
+dev.off()
 
 ### Comparison of different methods of design
 # We compare boundary emulators trained on different design methods:

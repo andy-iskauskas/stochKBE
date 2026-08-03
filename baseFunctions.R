@@ -229,7 +229,7 @@ create_boundary_ems <- function(data_raw, out_name, ranges, reps,
 rep_allocate <- function(points, var_em, rep_max, ntoadd, new_index = floor(nrow(points)/2)+1) {
   v_em_vals <- var_em$get_exp(points)
   rep_vals <- points$reps
-  rep_vals[seq(new_index, length(rep_vals))] <- ntoadd
+  rep_vals[seq(new_index, length(rep_vals))] <- max(ntoadd,2)
   total_reps <- sum(rep_vals)
   while(total_reps < rep_max) {
     old_v_vals <- v_em_vals/rep_vals
@@ -262,8 +262,8 @@ rep_allocate <- function(points, var_em, rep_max, ntoadd, new_index = floor(nrow
 #' @param return.raw If TRUE, returns the emulator variance at each (grid) point
 #' 
 #' @returns Either the mean emulator variance, or a data.frame of points and emulator variances.
-imspe <- function(pt, pre_em, data,
-                  new_point, invmat,
+imspe <- function(pt, pre_em, v_em, data,
+                  new_point, invmat, rep,
                   boundary_col = 1, boundary_val = 0,
                   return.raw = FALSE) {
   n_data <- rbind.data.frame(data, new_point)
@@ -275,7 +275,8 @@ imspe <- function(pt, pre_em, data,
   b <- R1(data, new_point, pre_em, boundary_val, boundary_col) *
     pre_em$get_cov(data_mutate[-nrow(data_mutate),], data_mutate[nrow(data_mutate),,drop=FALSE])
   c <- as.numeric(R1(new_point, new_point, pre_em, boundary_val, boundary_col) * 
-                    pre_em$get_cov(data_mutate[nrow(data_mutate),,drop=FALSE]))
+                    pre_em$get_cov(data_mutate[nrow(data_mutate),,drop=FALSE])) +
+    as.numeric(v_em$get_exp(new_point)/rep)
   term2b <- part_inv(invmat, b, c)
   diag_res <- mahalanobis(term2a, center = FALSE, cov = term2b, inverted = TRUE)
   complete <- term1 - diag_res
@@ -314,7 +315,8 @@ imspe <- function(pt, pre_em, data,
 #' 
 #' @returns Either a data.frame of proposed points, or (if `return_scores` is TRUE)
 #' a list consisting of this data.frame and a vector of imspe scores.
-point_design <- function(data, b_em, v_em, reps, ranges, testgrid_pts, pt_max,
+point_design <- function(data, b_em, v_em, reps, ranges, testgrid_pts,
+                         pt_max = 2*nrow(data), rep_max = 2*sum(reps),
                          boundary_col, boundary_val, nrepsadd = reps[1],
                          verbose = FALSE, return_scores = FALSE, in_par = FALSE,
                          nrandomrestart = 10) {
@@ -324,6 +326,15 @@ point_design <- function(data, b_em, v_em, reps, ranges, testgrid_pts, pt_max,
   testgrid <- data.frame(t(apply(tlhs, 1, function(x) {
     x * purrr::map_dbl(ranges, diff) + purrr::map_dbl(ranges, ~.[[1]])
   }))) |> setNames(names(ranges))
+  grid_var <- v_em$get_exp(testgrid)/(floor(rep_max/pt_max))
+  grid_var[grid_var < 0] <- 1e-6
+  ave_variance <- mean(grid_var)
+  # Possibly, at this point, allocate reps to existing points (if required)
+  # to get them to similar variance
+  if (verbose) print("Pre-allocation of reps to existing design points:")
+  t_rep <- sum(reps)
+  reps <- pmax(reps, round(v_em$get_exp(data)/ave_variance))
+  if (verbose) print(paste("An additional", sum(reps)-t_rep, "repetitions added to existing design points."))
   find_next_point <- function(data, b_em, v_em, reps, ranges) {
     datamutate <- (data |> dplyr::mutate(across(all_of(boundary_col), ~boundary_val)))
     v_em_vals <- v_em$get_exp(data)
@@ -334,7 +345,8 @@ point_design <- function(data, b_em, v_em, reps, ranges, testgrid_pts, pt_max,
     opt_func <- function(x) {
       x_mod <- data.frame(matrix(x, nrow = 1)) |> setNames(names(ranges))
       x_mod <- x_mod[,names(ranges), drop = FALSE]
-      imspe(testgrid, b_em, data, x_mod, start_inv, boundary_col, boundary_val)
+      which_n <- max(2, round(v_em$get_exp(x_mod)/ave_variance))
+      imspe(testgrid, b_em, v_em, data, x_mod, start_inv, which_n, boundary_col, boundary_val)
     }
     if (has_par_optim && in_par) {
       possible_points <- purrr::map(seq_len(nrandomrestart), function(i) {
@@ -347,6 +359,7 @@ point_design <- function(data, b_em, v_em, reps, ranges, testgrid_pts, pt_max,
       vals <- purrr::map_dbl(possible_points, "val")
       this_val <- min(vals)
       this_pt <- possible_points[[which.min(vals)]]$pt
+      this_rep <- max(2, round(v_em$get_exp(this_pt)/ave_variance))
     }
     else {
       possible_points <- purrr::map(seq_len(nrandomrestart), function(i) {
@@ -359,16 +372,18 @@ point_design <- function(data, b_em, v_em, reps, ranges, testgrid_pts, pt_max,
       vals <- purrr::map_dbl(possible_points, "val")
       this_val <- min(vals)
       this_pt <- possible_points[[which.min(vals)]]$pt
+      this_rep <- max(2, round(v_em$get_exp(this_pt)/ave_variance))
     }
     dists <- apply(data, 1, function(x) {
       sum((x-this_pt)^2)
     })
     if (this_val < 0) this_val <- Inf
     if (any(dists < 1e-6)) this_val <- NaN
-    return(list(val = this_val, point = this_pt))
+    return(list(val = this_val, point = this_pt, rep = this_rep))
   }
   counter <- 0
   while(nrow(data) < pt_max) {
+  # while(nrow(data) < pt_max && sum(reps) < rep_max) {
     pt_suggest <- find_next_point(data, b_em, v_em, reps, ranges)
     if (is.nan(pt_suggest$val)) next
     if (verbose) {
@@ -379,9 +394,12 @@ point_design <- function(data, b_em, v_em, reps, ranges, testgrid_pts, pt_max,
       p_scores <- c(p_scores, pt_suggest$val)
     }
     data <- rbind.data.frame(data, pt_suggest$point)
-    reps <- c(reps, nrepsadd)
+    reps <- c(reps, pt_suggest$rep)
     counter <- counter + 1
   }
+  # if (sum(reps) >= rep_max && nrow(data) < pt_max && verbose) {
+  #   print("Repetition budget expended before new point budget.")
+  # }
   pts_with_reps <- cbind.data.frame(data, reps) |> setNames(c(names(data), "reps"))
   if (return_scores)
     return(list(points = pts_with_reps, pt_scores = p_scores))
