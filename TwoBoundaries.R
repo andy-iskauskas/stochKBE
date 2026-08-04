@@ -223,6 +223,7 @@ small_test_grid <- data.frame(t(apply(test_lhs, 1, function(x) {
 ## Uses parallelisation if available:
 # futures: furrr::map (for rep_scores)
 # optimParallel: optim (for point_scores)
+this_base_em <- ems_wave1$no_boundary$expectation$I$o_em
 this_var_em <- ems_wave1$boundary_bulk$variance
 ## This takes a while, even with parallelisation - included RData file, but
 # uncomment to reproduce.
@@ -230,18 +231,16 @@ this_var_em <- ems_wave1$boundary_bulk$variance
 cl <- makeCluster(8); setDefaultCluster(cl = cl)
 clusterEvalQ(cl, library("dplyr"))
 clusterEvalQ(cl, library("hmer"))
-clusterExport(cl, c("new_point_score", "mean_em_var", "r1", "R1",
+clusterExport(cl, c("imspe", "r1", "R1",
                     "part_inv"))
 ## Create the plan for furrr
 plan(multisession, workers = 8)
 ## Produce new design
-new_design <- design_subselect(training_points,
-                               ems_wave1$no_boundary$expectation$I$o_em, this_var_em,
-                               rep(10, nrow(training_points)), ranges, small_test_grid,
-                               rep_max = 2800, pt_max = 280,
-                               store_order = TRUE, verbose = TRUE, return_scores = TRUE, ntoadd = 5,
-                               boundary_col = c(3,4), boundary_val = 0
-                               )
+new_design <- point_design(training_points, this_base_em, this_var_em,
+                           rep(10, nrow(training_points)), ranges, 2000,
+                           pt_max = 280, rep_max = 2800, verbose = TRUE,
+                           in_par = TRUE, boundary_col = c(3,4), boundary_val = 0,
+                           nrepsadd = 2)
 save.image("TwoBoundaries190326.RData")
 #load("TwoBoundPoints.RData")
 
